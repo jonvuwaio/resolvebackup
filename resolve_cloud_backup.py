@@ -58,7 +58,7 @@ import webbrowser
 from pathlib import Path
 
 APP = "resolve-cloud-backup"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -114,7 +114,8 @@ DEFAULTS = {
     "fallback_min_interval_minutes": 120,
     # Retention: keep every backup newer than keep_all_hours, then the newest one
     # per day for keep_daily_days. The newest backup of a project is always kept.
-    "retention": {"keep_all_hours": 24, "keep_daily_days": 30},
+    # max_backups: never keep more than this many backups of a project (the newest ones). 0 = no limit.
+    "retention": {"keep_all_hours": 24, "keep_daily_days": 30, "max_backups": 0},
     # Override auto-detected Resolve scripting locations if you installed elsewhere.
     "resolve_script_api": None,
     "resolve_script_lib": None,
@@ -253,8 +254,9 @@ def backup_time(p: Path) -> dt.datetime:
 
 
 def select_deletions(files: list[tuple[Path, dt.datetime]], now: dt.datetime,
-                     keep_all_hours: float, keep_daily_days: float) -> list[Path]:
-    """Pure retention policy. files = [(path, timestamp)]. Returns paths to delete."""
+                     keep_all_hours: float, keep_daily_days: float, max_backups: int = 0) -> list[Path]:
+    """Pure retention policy. files = [(path, timestamp)]. Returns paths to delete.
+    max_backups > 0 caps how many are kept (the newest of those the time rules keep)."""
     if not files:
         return []
     files = sorted(files, key=lambda x: x[1], reverse=True)  # newest first
@@ -270,6 +272,8 @@ def select_deletions(files: list[tuple[Path, dt.datetime]], now: dt.datetime,
             if day not in seen_days:  # newest of that day (list is newest-first)
                 seen_days.add(day)
                 keep.add(path)
+    if max_backups > 0:
+        keep = set([p for p, _ in files if p in keep][:max_backups])  # files is newest-first
     return [p for p, _ in files if p not in keep]
 
 
@@ -489,7 +493,7 @@ def validate_settings(inc: dict) -> tuple[dict, dict]:
         r = inc["retention"]
         if isinstance(r, dict):
             sub: dict = {}
-            for key, lo, hi in (("keep_all_hours", 1, 8760), ("keep_daily_days", 0, 3650)):
+            for key, lo, hi in (("keep_all_hours", 1, 8760), ("keep_daily_days", 0, 3650), ("max_backups", 0, 10000)):
                 if key in r:
                     whole(key, lo, hi, src=r, dest=sub, label=f"retention.{key}")
             if sub:
@@ -871,14 +875,15 @@ class Backup:
     # ---- retention
     def _retention(self, touched: set, now: dt.datetime, state: dict) -> None:
         dirs = set(touched)
-        today = now.date().isoformat()
-        if state.get("last_full_sweep") != today:
-            dirs |= {p.parent for p in self.root.rglob("*__*.drp") if not p.name.startswith(".partial-")}
-            state["last_full_sweep"] = today
         r = self.cfg["retention"]
+        # Sweep every project folder once a day, and straight away when the retention settings change.
+        sweep = f"{now.date().isoformat()} {json.dumps(r, sort_keys=True)}"
+        if state.get("last_full_sweep") != sweep:
+            dirs |= {p.parent for p in self.root.rglob("*__*.drp") if not p.name.startswith(".partial-")}
+            state["last_full_sweep"] = sweep
         for d in dirs:
             files = [(p, backup_time(p)) for p in d.glob("*.drp") if not p.name.startswith(".partial-")]
-            for p in select_deletions(files, now, r["keep_all_hours"], r["keep_daily_days"]):
+            for p in select_deletions(files, now, r["keep_all_hours"], r["keep_daily_days"], r.get("max_backups") or 0):
                 try:
                     p.unlink()
                     log.info("Pruned %s", p)

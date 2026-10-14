@@ -410,6 +410,27 @@ class BackupTests(unittest.TestCase):
         self.assertIn(files[4][0], kept)
         self.assertIn(files[5][0], dels)
 
+    def test_max_backups_caps_each_project(self):
+        files = [(Path(f"f{h}"), self.now - dt.timedelta(hours=h)) for h in (1, 2, 3, 4, 50)]
+        dels = rcb.select_deletions(files, self.now, 24, 30, max_backups=2)
+        self.assertEqual(sorted(dels), [Path("f3"), Path("f4"), Path("f50")])  # newest two kept
+        self.assertEqual(rcb.select_deletions(files, self.now, 24, 30, max_backups=0), [])  # 0 = no cap
+        self.assertEqual(rcb.select_deletions(files, self.now, 24, 30, max_backups=1), [p for p, _ in files[1:]])
+
+    def test_max_backups_end_to_end_and_on_change(self):
+        self.pm.add([], "P", stamp(self.now, hours=1))
+        b = self.backup()
+        for _ in range(4):
+            self.pm.tree["projects"]["P"]["mod"] = stamp(self.clock.t, minutes=1)
+            b.cycle()
+            self.clock.advance(minutes=30)
+        self.assertEqual(len(self.files()), 4)
+        b.cfg["retention"] = dict(b.cfg["retention"], max_backups=2)
+        b.cycle()  # nothing changed in Resolve, but the new setting is applied straight away
+        kept = self.files()
+        self.assertEqual(len(kept), 2)
+        self.assertEqual([p.name for p in kept], ["P__20261013-130000.drp", "P__20261013-133000.drp"])
+
     def test_newest_always_kept(self):
         only = [(Path("x"), self.now - dt.timedelta(days=900))]
         self.assertEqual(rcb.select_deletions(only, self.now, 24, 30), [])

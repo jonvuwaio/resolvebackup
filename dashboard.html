@@ -298,6 +298,10 @@ body.open #drawer { transform: none; visibility: visible; }
     <div class="f"><span class="lab">Keep backups</span>
       <div class="row"><input type="number" id="keep_all_hours" min="1" max="8760" aria-label="Hours to keep every backup"><span>hours of every backup, then one a day for</span><input type="number" id="keep_daily_days" min="0" max="3650" aria-label="Days to keep daily backups"><span>days</span></div>
       <div class="err" data-err="retention.keep_all_hours"></div><div class="err" data-err="retention.keep_daily_days"></div></div>
+    <div class="f"><label class="check"><input type="checkbox" id="max_on"> Never keep more than</label>
+      <div class="row" style="margin-top:8px"><input type="number" id="max_backups" min="1" max="10000" aria-label="Most backups to keep per project"><span>backups of each project</span></div>
+      <div class="hint">The oldest are deleted first. This applies on top of the time rules above.</div>
+      <div class="err" data-err="retention.max_backups"></div></div>
     <div class="f"><label for="db_name">Database</label>
       <input type="text" id="db_name" spellcheck="false" placeholder="Use the one open in Resolve">
       <div class="hint">Only fill this in if you back up a database other than the one Resolve has open.</div>
@@ -620,7 +624,7 @@ body.open #drawer { transform: none; visibility: visible; }
   });
 
   // ---------- settings drawer ----------
-  const FIELDS = ["backup_dir", "interval_minutes", "load_to_export", "initial_lookback_days", "keep_all_hours", "keep_daily_days", "db_name", "hours_on", "hours_from", "hours_to", "include", "exclude"];
+  const FIELDS = ["backup_dir", "interval_minutes", "load_to_export", "initial_lookback_days", "keep_all_hours", "keep_daily_days", "db_name", "hours_on", "hours_from", "hours_to", "include", "exclude", "max_on", "max_backups"];
   let initial = "", opener = null;
   const lines = (id) => $(id).value.split("\n").map((x) => x.trim()).filter(Boolean);
   function collect() {
@@ -629,18 +633,20 @@ body.open #drawer { transform: none; visibility: visible; }
       active_hours: $("hours_on").checked ? [$("hours_from").value, $("hours_to").value] : null,
       load_to_export: $("load_to_export").value, include: lines("include"), exclude: lines("exclude"),
       initial_lookback_days: Number($("initial_lookback_days").value),
-      retention: { keep_all_hours: Number($("keep_all_hours").value), keep_daily_days: Number($("keep_daily_days").value) },
+      retention: { keep_all_hours: Number($("keep_all_hours").value), keep_daily_days: Number($("keep_daily_days").value),
+                   max_backups: $("max_on").checked ? Number($("max_backups").value) : 0 },
       database: { name: $("db_name").value.trim() || null, type: null },
     };
   }
   function fill(s) {
     $("backup_dir").value = s.backup_dir; $("interval_minutes").value = s.interval_minutes; $("load_to_export").value = s.load_to_export;
     $("initial_lookback_days").value = s.initial_lookback_days; $("keep_all_hours").value = s.retention.keep_all_hours; $("keep_daily_days").value = s.retention.keep_daily_days;
+    $("max_on").checked = s.retention.max_backups > 0; $("max_backups").value = s.retention.max_backups || 10;
     $("db_name").value = (s.database && s.database.name) || ""; $("include").value = s.include.join("\n"); $("exclude").value = s.exclude.join("\n");
     $("hours_on").checked = !!s.active_hours; $("hours_from").value = s.active_hours ? s.active_hours[0] : "07:00"; $("hours_to").value = s.active_hours ? s.active_hours[1] : "22:00";
     syncHours();
   }
-  const syncHours = () => { $("hours_from").disabled = $("hours_to").disabled = !$("hours_on").checked; };
+  const syncHours = () => { $("hours_from").disabled = $("hours_to").disabled = !$("hours_on").checked; $("max_backups").disabled = !$("max_on").checked; };
   const dirty = () => { $("save").disabled = JSON.stringify(collect()) === initial; };
   async function openSettings() {
     opener = document.activeElement;
@@ -660,6 +666,7 @@ body.open #drawer { transform: none; visibility: visible; }
   $("form").addEventListener("input", () => { syncHours(); dirty(); });
   $("form").addEventListener("submit", (ev) => ev.preventDefault());
   $("hours_on").addEventListener("change", () => { syncHours(); dirty(); });
+  $("max_on").addEventListener("change", () => { syncHours(); dirty(); });
   $("save").addEventListener("click", async () => {
     const msg = $("saveMsg"); msg.className = ""; msg.textContent = "Saving";
     for (const e of document.querySelectorAll("[data-err]")) e.textContent = "";

@@ -170,7 +170,7 @@ class SettingsValidation(unittest.TestCase):
         clean, errs = rcb.validate_settings({
             "backup_dir": str(d), "interval_minutes": 15, "active_hours": ["07:00", "22:30"],
             "include": [" Client A ", ""], "load_to_export": "auto", "switch_database": False,
-            "retention": {"keep_all_hours": 12, "keep_daily_days": 10},
+            "retention": {"keep_all_hours": 12, "keep_daily_days": 10, "max_backups": 5},
             "database": {"name": "Studio Cloud", "type": ""}})
         self.assertEqual(errs, {})
         self.assertTrue(d.is_dir())
@@ -183,9 +183,9 @@ class SettingsValidation(unittest.TestCase):
         _, errs = rcb.validate_settings({
             "interval_minutes": 0, "retry_minutes": "5", "active_hours": ["25:00", "22:00"],
             "backup_dir": str(blocker / "sub"), "load_to_export": "sometimes", "include": "x",
-            "retention": {"keep_all_hours": -1}, "alert_command": "rm -rf /", "min_free_gb": True})
+            "retention": {"keep_all_hours": -1, "max_backups": -3}, "alert_command": "rm -rf /", "min_free_gb": True})
         for k in ("interval_minutes", "retry_minutes", "active_hours", "backup_dir", "load_to_export",
-                  "include", "retention.keep_all_hours", "alert_command", "min_free_gb"):
+                  "include", "retention.keep_all_hours", "retention.max_backups", "alert_command", "min_free_gb"):
             self.assertIn(k, errs, k)
 
     def test_relative_dir_rejected_and_same_times_rejected(self):

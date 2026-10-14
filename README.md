@@ -124,7 +124,7 @@ Changes apply from the next cycle without restarting. Only the dashboard port ne
 | `alert_command` | `null` | Shell command run once when a project hits `alert_after_failures` (default 3) consecutive failures. Gets `RCB_PROJECT`, `RCB_DATABASE`, `RCB_FAILURES`, `RCB_REASON`. |
 | `save_open_project` | `false` | Save the project you have open before exporting. |
 | `max_exports_per_cycle` | `50` | Remaining projects are picked up next cycle. |
-| `retention` | `24 h / 30 days` | `keep_all_hours`, `keep_daily_days`. |
+| `retention` | `24 h / 30 days, no cap` | `keep_all_hours`, `keep_daily_days`, and `max_backups`: never keep more than this many backups of each project (the newest). `0` = no limit. Applied on top of the time rules, straight away when changed. |
 | `min_free_gb` | `5` | Skip the cycle if the backup disk is nearly full. |
 | `with_stills_and_luts` | `true` | Passed to `ExportProject`. |
 | `dashboard` | `{enabled: true, port: 8765}` | The local live dashboard. If the port is taken the next free one (up to +19) is used. `alert_command` isn't editable from the browser, on purpose. |
