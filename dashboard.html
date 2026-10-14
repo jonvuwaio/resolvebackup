@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Resolve Backup</title>
+<link id="icon" rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%238d9198'/%3E%3C/svg%3E">
+<style>
+/* Neutral greys on purpose: a grading suite keeps its surround free of colour cast.
+   Colour is reserved for status, using the same muted hues as Resolve's clip labels. */
+:root {
+  --bg: #151617; --panel: #1b1c1e; --raised: #26282b; --line: #313438; --line-soft: #26282b;
+  --text: #dcdee1; --dim: #90949b; --faint: #5f636a;
+  --ok: #46b8a0; --run: #5b9dff; --wait: #e5a24d; --bad: #ec6f64; --idle: #8d9198;
+  --playhead: #f2f3f4; --on-accent: #0d1117;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ececed; --panel: #f5f5f6; --raised: #e2e3e5; --line: #cfd1d4; --line-soft: #dcdde0;
+    --text: #1d1f22; --dim: #5d6168; --faint: #8d9198;
+    --ok: #1f8f78; --run: #2f6fdc; --wait: #b9740f; --bad: #cf4338; --idle: #6c7078;
+    --playhead: #1d1f22; --on-accent: #ffffff;
+  }
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { margin: 0; color: var(--text); font: 14px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
+button, input, select, textarea { font: inherit; color: inherit; }
+.num { font-variant-numeric: tabular-nums; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 28px 32px 56px; }
+:focus-visible { outline: 2px solid var(--run); outline-offset: 2px; border-radius: 3px; }
+
+/* ---------- header ---------- */
+.top { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+.state { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.dot { width: 14px; height: 14px; border-radius: 50%; background: var(--idle); flex: none; }
+.dot.run { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .dot.run { animation: none; } }
+h1 { margin: 0; font-size: 30px; line-height: 1.15; font-weight: 500; letter-spacing: -.01em; }
+.sub { margin: 6px 0 0 28px; color: var(--dim); display: flex; gap: 6px 22px; flex-wrap: wrap; }
+.sub b { font-weight: 500; color: var(--text); }
+.actions { display: flex; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--raised); border-radius: 4px; padding: 7px 14px; cursor: pointer; }
+.btn:hover:not(:disabled) { border-color: var(--faint); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.primary { background: var(--run); border-color: var(--run); color: var(--on-accent); font-weight: 600; }
+.banner { margin: 18px 0 0; padding: 10px 14px; border-left: 3px solid var(--wait); background: var(--panel); }
+.banner.bad { border-color: var(--bad); }
+.banner[hidden] { display: none; }
+
+/* ---------- timeline ---------- */
+.tl-head { display: flex; align-items: baseline; justify-content: space-between; margin: 34px 0 8px; gap: 16px; flex-wrap: wrap; }
+.tl-head h2, .col h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.seg button { border: 0; background: transparent; padding: 4px 12px; cursor: pointer; color: var(--dim); }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--raised); color: var(--text); }
+.tl { position: relative; height: 132px; background: var(--panel); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow: hidden; user-select: none; }
+.tl .tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--line-soft); }
+.tl .tick.day { border-left-color: var(--line); }
+.tl .tick span { position: absolute; top: 8px; left: 6px; font-size: 12px; color: var(--faint); white-space: nowrap; }
+.tl .lane { position: absolute; left: 0; right: 0; bottom: 14px; height: 64px; }
+.tl .bar { position: absolute; bottom: 0; width: 4px; margin-left: -2px; border-radius: 2px 2px 0 0; background: var(--ok); cursor: default; }
+.tl .bar:hover { filter: brightness(1.25); }
+.tl .bar.quiet { background: var(--faint); opacity: .7; }
+.tl .bar.bad { background: var(--bad); }
+.tl .bar.wait { background: var(--wait); }
+.tl .next { position: absolute; bottom: 0; width: 4px; margin-left: -2px; height: 28px; border: 1px dashed var(--faint); border-radius: 2px 2px 0 0; }
+.tl .live { position: absolute; bottom: 0; height: 10px; background: var(--run); opacity: .85; border-radius: 2px; }
+.tl .head { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px solid var(--playhead); pointer-events: none; }
+.tl .head .flag { position: absolute; top: 0; right: 0; background: var(--playhead); color: var(--bg); padding: 1px 7px 2px; font-size: 13px; font-weight: 600; border-radius: 0 0 0 3px; }
+.tl .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); }
+.key { display: flex; gap: 18px; margin-top: 8px; color: var(--dim); font-size: 12.5px; flex-wrap: wrap; }
+.key i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+#tip { position: fixed; z-index: 5; pointer-events: none; background: var(--text); color: var(--bg); padding: 4px 9px; border-radius: 3px; font-size: 12.5px; max-width: 320px; }
+#tip[hidden] { display: none; }
+
+/* ---------- now + activity ---------- */
+.cols { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); margin-top: 36px; }
+.col { padding: 0 28px 0 0; min-width: 0; }
+.col + .col { padding: 0 0 0 28px; border-left: 1px solid var(--line); }
+.now-main { margin: 14px 0 0; font-size: 24px; font-weight: 500; line-height: 1.25; overflow-wrap: anywhere; }
+.now-sub { margin: 4px 0 0; color: var(--dim); }
+.bar-track { height: 4px; background: var(--raised); border-radius: 2px; margin: 18px 0 0; overflow: hidden; }
+.bar-fill { height: 100%; width: 0; background: var(--run); transition: width .4s ease; }
+.bar-fill.indet { width: 35%; animation: slide 1.4s ease-in-out infinite; }
+@keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .bar-fill.indet { animation: none; margin-left: 0; width: 100%; opacity: .4; } }
+.counts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 22px 0 0; }
+.counts div { min-width: 0; }
+.counts dt { color: var(--dim); font-size: 12.5px; }
+.counts dd { margin: 0; font-size: 28px; font-weight: 300; line-height: 1.2; }
+.counts dd.bad { color: var(--bad); }
+.fails { margin: 18px 0 0; padding: 0; list-style: none; }
+.fails li { padding: 8px 0; border-top: 1px solid var(--line-soft); }
+.fails small { display: block; color: var(--dim); }
+.feed-tools { display: flex; justify-content: space-between; align-items: center; margin: 0 0 8px; }
+.feed-tools label { color: var(--dim); display: flex; gap: 6px; align-items: center; cursor: pointer; }
+#feed { height: 292px; overflow: auto; margin: 0; padding: 0; list-style: none; background: var(--panel); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+#feed li { display: grid; grid-template-columns: 66px 10px 1fr; gap: 0 10px; padding: 4px 12px; align-items: baseline; }
+#feed li:hover { background: var(--raised); }
+#feed time { color: var(--faint); }
+#feed .lv { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); align-self: center; }
+#feed .WARNING .lv { background: var(--wait); } #feed .ERROR .lv, #feed .CRITICAL .lv { background: var(--bad); }
+#feed .msg { overflow-wrap: anywhere; }
+.none { padding: 28px 16px; color: var(--dim); }
+
+/* ---------- projects ---------- */
+.lib { margin-top: 44px; }
+.lib-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
+.lib-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.tools { display: flex; gap: 8px; flex-wrap: wrap; }
+.tools input, .tools select { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; }
+.tools input { width: 240px; max-width: 100%; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-weight: 500; color: var(--dim); padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th button { all: unset; cursor: pointer; }
+th button:focus-visible { outline: 2px solid var(--run); }
+th[aria-sort] button::after { content: attr(data-arrow); margin-left: 6px; color: var(--text); }
+td { padding: 9px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+td.r, th.r { text-align: right; }
+td small { display: block; color: var(--dim); }
+.name { font-weight: 500; overflow-wrap: anywhere; }
+.chip { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+@media (max-width: 640px) { .chip { white-space: normal; } }
+.chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.chip.ok i { background: var(--ok); } .chip.failing i { background: var(--bad); }
+.chip.failing { color: var(--bad); }
+.scroll { overflow-x: auto; }
+[hidden] { display: none !important; }
+.foot { margin-top: 28px; color: var(--dim); display: flex; gap: 6px 28px; flex-wrap: wrap; }
+
+/* ---------- settings drawer ---------- */
+#scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .18s; }
+#drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100%); background: var(--panel); border-left: 1px solid var(--line); transform: translateX(100%); transition: transform .2s ease; display: flex; flex-direction: column; visibility: hidden; }
+body.open #scrim { opacity: 1; pointer-events: auto; }
+body.open #drawer { transform: none; visibility: visible; }
+@media (prefers-reduced-motion: reduce) { #drawer, #scrim { transition: none; } }
+#drawer header { padding: 20px 24px 12px; display: flex; justify-content: space-between; align-items: center; }
+#drawer h2 { margin: 0; font-size: 18px; font-weight: 600; }
+#drawer form { overflow: auto; padding: 0 24px 24px; flex: 1; }
+.f { margin: 18px 0 0; }
+.f label, .f .lab { display: block; font-weight: 500; margin-bottom: 4px; }
+.f input[type=text], .f input[type=number], .f input[type=time], .f select, .f textarea { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 7px 10px; }
+.f textarea { min-height: 70px; resize: vertical; }
+.f .hint { color: var(--dim); font-size: 12.5px; margin-top: 4px; }
+.f .err { color: var(--bad); font-size: 12.5px; margin-top: 4px; }
+.f .row { display: flex; gap: 10px; align-items: center; }
+.f .row > * { flex: 1; min-width: 0; }
+.f .row > span { flex: none; color: var(--dim); }
+.check { display: flex; gap: 8px; align-items: center; font-weight: 500; }
+#drawer footer { padding: 14px 24px; border-top: 1px solid var(--line); display: flex; gap: 12px; align-items: center; }
+#saveMsg { color: var(--dim); flex: 1; }
+#saveMsg.ok { color: var(--ok); } #saveMsg.bad { color: var(--bad); }
+
+@media (max-width: 900px) {
+  .wrap { padding: 20px 16px 40px; }
+  .cols { grid-template-columns: 1fr; }
+  .col, .col + .col { padding: 0; border: 0; }
+  .col + .col { margin-top: 32px; }
+  .sub { margin-left: 0; }
+  .counts { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  #tbl th:nth-child(3), #tbl td:nth-child(3), #tbl th:nth-child(4), #tbl td:nth-child(4) { display: none; }
+  td { padding: 9px 8px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <div class="state"><span class="dot" id="dot"></span><h1 id="stateText">Connecting</h1></div>
+      <p class="sub" id="sub"></p>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="runNow">Back up now</button>
+      <button class="btn" id="pause">Pause</button>
+      <button class="btn" id="openSettings">Settings</button>
+    </div>
+  </div>
+  <div class="banner" id="banner" hidden></div>
+
+  <div class="tl-head">
+    <h2>Backup timeline</h2>
+    <div class="seg" role="group" aria-label="Timeline range" id="range">
+      <button data-w="6" aria-pressed="false">6 hours</button>
+      <button data-w="24" aria-pressed="true">24 hours</button>
+      <button data-w="168" aria-pressed="false">7 days</button>
+    </div>
+  </div>
+  <div class="tl" id="tl" role="img" aria-label="Timeline of backup runs"></div>
+  <div class="key">
+    <span><i style="background:var(--ok)"></i>Backed up (taller means more projects)</span>
+    <span><i style="background:var(--faint)"></i>Checked, nothing changed</span>
+    <span><i style="background:var(--bad)"></i>Some projects failed</span>
+    <span><i style="background:var(--wait)"></i>Skipped</span>
+  </div>
+
+  <div class="cols">
+    <section class="col" aria-labelledby="nowH">
+      <h2 id="nowH">Right now</h2>
+      <p class="now-main" id="nowMain"></p>
+      <p class="now-sub" id="nowSub"></p>
+      <div class="bar-track" id="track" hidden><div class="bar-fill" id="fill"></div></div>
+      <dl class="counts" id="counts" hidden>
+        <div><dt>Checked</dt><dd class="num" id="cSeen">0</dd></div>
+        <div><dt>Backed up</dt><dd class="num" id="cDone">0</dd></div>
+        <div><dt>Unchanged</dt><dd class="num" id="cSame">0</dd></div>
+        <div><dt>Failed</dt><dd class="num" id="cFail">0</dd></div>
+      </dl>
+      <ul class="fails" id="fails"></ul>
+    </section>
+    <section class="col" aria-labelledby="feedH">
+      <div class="feed-tools">
+        <h2 id="feedH">Activity</h2>
+        <label><input type="checkbox" id="onlyProblems"> Problems only</label>
+      </div>
+      <ul id="feed" aria-live="off"></ul>
+    </section>
+  </div>
+
+  <section class="lib" aria-labelledby="libH">
+    <div class="lib-head">
+      <h2 id="libH">Projects</h2>
+      <div class="tools">
+        <input type="search" id="q" placeholder="Search projects" aria-label="Search projects">
+        <select id="flt" aria-label="Filter projects">
+          <option value="all">All projects</option>
+          <option value="attention">Needs attention</option>
+          <option value="ok">Backed up</option>
+          <option value="old">Not changed recently</option>
+        </select>
+      </div>
+    </div>
+    <div class="scroll"><table id="tbl">
+      <thead><tr>
+        <th aria-sort="none"><button data-k="name">Project</button></th>
+        <th aria-sort="descending"><button data-k="last_backup" data-arrow="↓">Last backup</button></th>
+        <th><button data-k="last_modified">Changed in Resolve</button></th>
+        <th class="r"><button data-k="size">Size</button></th>
+        <th><button data-k="status">Status</button></th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+  </section>
+  <div class="foot" id="foot"></div>
+</div>
+
+<div id="tip" hidden></div>
+<div id="scrim"></div>
+<aside id="drawer" role="dialog" aria-modal="true" aria-labelledby="setH" aria-hidden="true">
+  <header><h2 id="setH">Settings</h2><button class="btn" id="closeSettings">Close</button></header>
+  <form id="form" autocomplete="off">
+    <div class="f"><label for="backup_dir">Backup folder</label>
+      <input type="text" id="backup_dir" spellcheck="false">
+      <div class="hint">Use a full path, for example /Volumes/Backup/Resolve. The folder is created if it doesn't exist.</div>
+      <div class="err" data-err="backup_dir"></div></div>
+    <div class="f"><label for="interval_minutes">Check for changes every</label>
+      <div class="row"><input type="number" id="interval_minutes" min="1" max="1440"><span>minutes</span></div>
+      <div class="err" data-err="interval_minutes"></div></div>
+    <div class="f"><label class="check"><input type="checkbox" id="hours_on"> Only back up during set hours</label>
+      <div class="row" style="margin-top:8px"><input type="time" id="hours_from" aria-label="From"><span>to</span><input type="time" id="hours_to" aria-label="To"></div>
+      <div class="hint">You can still use Back up now outside these hours.</div>
+      <div class="err" data-err="active_hours"></div></div>
+    <div class="f"><label for="load_to_export">If a project can't be exported directly</label>
+      <select id="load_to_export">
+        <option value="auto">Open it read-only, export it, then close it</option>
+        <option value="collab">Do that only for collaboration projects</option>
+        <option value="never">Don't open it, try again later</option>
+      </select>
+      <div class="hint">Projects are only ever opened when none is open in this copy of Resolve.</div>
+      <div class="err" data-err="load_to_export"></div></div>
+    <div class="f"><label for="include">Only back up these folders</label>
+      <textarea id="include" spellcheck="false" placeholder="Leave empty to back up everything"></textarea>
+      <div class="hint">One folder or project path per line. Wildcards work, for example Client A/*.</div>
+      <div class="err" data-err="include"></div></div>
+    <div class="f"><label for="exclude">Never back up</label>
+      <textarea id="exclude" spellcheck="false"></textarea>
+      <div class="err" data-err="exclude"></div></div>
+    <div class="f"><label for="initial_lookback_days">First run: only projects changed in the last</label>
+      <div class="row"><input type="number" id="initial_lookback_days" min="1" max="3650"><span>days</span></div>
+      <div class="err" data-err="initial_lookback_days"></div></div>
+    <div class="f"><span class="lab">Keep backups</span>
+      <div class="row"><input type="number" id="keep_all_hours" min="1" max="8760" aria-label="Hours to keep every backup"><span>hours of every backup, then one a day for</span><input type="number" id="keep_daily_days" min="0" max="3650" aria-label="Days to keep daily backups"><span>days</span></div>
+      <div class="err" data-err="retention.keep_all_hours"></div><div class="err" data-err="retention.keep_daily_days"></div></div>
+    <div class="f"><label for="db_name">Database</label>
+      <input type="text" id="db_name" spellcheck="false" placeholder="Use the one open in Resolve">
+      <div class="hint">Only fill this in if you back up a database other than the one Resolve has open.</div>
+      <div class="err" data-err="database"></div></div>
+    <p class="hint" id="cfgPath" style="margin-top:22px"></p>
+  </form>
+  <footer><span id="saveMsg" role="status"></span><button class="btn primary" id="save" disabled>Save settings</button></footer>
+</aside>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const TOKEN = new URLSearchParams(location.search).get("t") || sessionStorage.getItem("rcbToken") || "";
+  try { sessionStorage.setItem("rcbToken", TOKEN); } catch (e) { /* private mode */ }
+
+  const S = { status: null, lib: null, events: [], seq: 0, offline: false, denied: false,
+              hours: 24, filter: "all", q: "", problems: false, sort: { k: "last_backup", dir: -1 }, libSig: "" };
+
+  const STATUS_TEXT = {
+    resolve_unavailable: "DaVinci Resolve wasn't reachable",
+    low_disk: "Backup disk almost full",
+    backup_dir_unavailable: "Backup folder unavailable",
+    database_not_current: "A different database is open in Resolve",
+    database_not_found: "Database not found in Resolve",
+    project_open_cannot_switch: "A project is open, so the database couldn't be switched",
+    switch_database_failed: "Couldn't switch database", switch_failed: "Couldn't switch database",
+    no_project_manager: "Resolve's Project Manager wasn't available", error: "The check hit an error",
+  };
+  const HELP = {
+    resolve_unavailable: "Open DaVinci Resolve Studio, sign in to Blackmagic Cloud, and set Preferences > System > General > External scripting using to Local.",
+    low_disk: "Free up space or choose another backup folder in Settings.",
+    backup_dir_unavailable: "Check the drive or network share is connected, or choose another folder in Settings.",
+    database_not_current: "Open the database you want backed up in Resolve, or set it under Settings.",
+  };
+
+  // ---------- helpers ----------
+  const h = (tag, attrs, ...kids) => {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (k === "class") el.className = v; else if (k === "text") el.textContent = v;
+      else if (v !== false && v != null) el.setAttribute(k, v === true ? "" : v);
+    }
+    for (const k of kids.flat()) if (k != null) el.append(k.nodeType ? k : document.createTextNode(String(k)));
+    return el;
+  };
+  const date = (s) => (s ? new Date(s) : null);
+  const pad = (n) => String(n).padStart(2, "0");
+  const hms = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const mmss = (sec) => { sec = Math.max(0, Math.round(sec)); return sec >= 3600 ? `${Math.floor(sec / 3600)}:${pad(Math.floor(sec % 3600 / 60))}:${pad(sec % 60)}` : `${Math.floor(sec / 60)}:${pad(sec % 60)}`; };
+  const ago = (d) => {
+    if (!d) return "Never";
+    const s = (Date.now() - d.getTime()) / 1000;
+    if (s < 45) return "Just now";
+    if (s < 3600) return `${Math.round(s / 60)} min ago`;
+    if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+    return `${Math.round(s / 86400)} d ago`;
+  };
+  const bytes = (n) => { if (n == null) return ""; const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0; while (n >= 1000 && i < 4) { n /= 1000; i++; } return `${n >= 100 || i === 0 ? Math.round(n) : n.toFixed(1)} ${u[i]}`; };
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+  async function api(path, body) {
+    const opt = { cache: "no-store", headers: { "X-RCB-Token": TOKEN } };
+    if (body !== undefined) { opt.method = "POST"; opt.body = JSON.stringify(body); opt.headers["Content-Type"] = "application/json"; }
+    const r = await fetch(path, opt);
+    let data = null; try { data = await r.json(); } catch (e) { /* empty */ }
+    if (!r.ok) { const err = new Error("HTTP " + r.status); err.status = r.status; err.data = data; throw err; }
+    return data;
+  }
+
+  // ---------- state words ----------
+  function view() {
+    const s = S.status;
+    if (S.denied) return { text: "Access token missing", color: "var(--bad)", key: "denied" };
+    if (!s || S.offline) return { text: S.status ? "Service not reachable" : "Connecting", color: "var(--idle)", key: "offline" };
+    const failed = (s.last_cycle && (s.last_cycle.failed || s.last_cycle.failing)) || 0;
+    const lastBad = s.last_cycle && s.last_cycle.status && !["ok", "resolve_unavailable"].includes(s.last_cycle.status);
+    switch (s.state) {
+      case "running": return { text: "Backing up now", color: "var(--run)", key: "run" };
+      case "paused": return { text: "Paused", color: "var(--idle)", key: "paused" };
+      case "waiting_for_resolve": return { text: "Waiting for Resolve", color: "var(--wait)", key: "wait" };
+      case "outside_active_hours": return { text: "Resting until " + ((s.config.active_hours || ["", ""])[0] || "morning"), color: "var(--idle)", key: "rest" };
+      case "idle":
+        if (failed || lastBad) return { text: "Needs attention", color: "var(--bad)", key: "bad" };
+        return { text: "Up to date", color: "var(--ok)", key: "ok" };
+      default: return { text: "Starting", color: "var(--idle)", key: "start" };
+    }
+  }
+
+  // ---------- render: header ----------
+  function renderHeader() {
+    const v = view(), s = S.status;
+    $("stateText").textContent = v.text;
+    $("dot").style.background = v.color;
+    $("dot").classList.toggle("run", v.key === "run");
+    document.title = `${v.text} · Resolve Backup`;
+    $("icon").href = "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="${v.color.startsWith("var") ? getComputedStyle(document.documentElement).getPropertyValue(v.color.slice(4, -1)).trim() : v.color}"/></svg>`);
+    const sub = $("sub"); sub.replaceChildren();
+    if (s && s.resolve && s.resolve.connected) {
+      const r = s.resolve;
+      sub.append(h("span", {}, "DaVinci Resolve ", h("b", {}, r.version || "connected")));
+      if (r.database) sub.append(h("span", {}, "Database ", h("b", {}, r.database)));
+      sub.append(h("span", {}, r.open_project ? ["Open project ", h("b", {}, r.open_project)] : "No project open here"));
+    } else if (s) sub.append(h("span", {}, "DaVinci Resolve isn't connected"));
+    const running = s && s.state === "running";
+    $("runNow").disabled = !s || S.offline || running;
+    $("pause").disabled = !s || S.offline;
+    $("pause").textContent = s && s.paused ? "Resume" : "Pause";
+
+    const b = $("banner");
+    let msg = null, bad = false;
+    if (S.denied) { msg = "This page needs its access link. Open it from the menu bar icon, or run resolve_cloud_backup.py dashboard."; bad = true; }
+    else if (S.offline) { msg = "Can't reach the backup service. It may have stopped or restarted. This page keeps trying."; bad = true; }
+    else if (s && s.last_cycle && HELP[s.last_cycle.status] && s.state !== "running") { msg = HELP[s.last_cycle.status]; bad = s.last_cycle.status !== "resolve_unavailable"; }
+    b.hidden = !msg; b.classList.toggle("bad", bad); if (msg) b.textContent = msg;
+  }
+
+  // ---------- render: right now ----------
+  function renderNow() {
+    const s = S.status, main = $("nowMain"), sub = $("nowSub");
+    const track = $("track"), counts = $("counts"), fails = $("fails");
+    track.hidden = counts.hidden = true;
+    if (!s) { main.textContent = "Connecting to the backup service"; sub.textContent = ""; fails.replaceChildren(); return; }
+    const c = s.cycle, last = s.last_cycle;
+    if (s.state === "running" && c) {
+      main.textContent = c.current || (c.phase === "connecting" ? "Connecting to Resolve" : "Reading the project library");
+      sub.textContent = (c.phase === "exporting" ? "Exporting" : c.phase === "connecting" ? "Connecting" : "Scanning the library") + ", running for " + mmss((Date.now() - date(c.started_at)) / 1000);
+      track.hidden = counts.hidden = false;
+      const f = $("fill");
+      if (c.expected) { f.classList.remove("indet"); f.style.width = Math.min(100, Math.round(c.seen / c.expected * 100)) + "%"; }
+      else { f.classList.add("indet"); f.style.width = ""; }
+      $("cSeen").textContent = c.seen; $("cDone").textContent = c.exported; $("cSame").textContent = c.unchanged + c.skipped_old;
+      $("cFail").textContent = c.failed; $("cFail").className = "num" + (c.failed ? " bad" : "");
+    } else if (s.state === "paused") {
+      main.textContent = "Paused";
+      sub.textContent = "Nothing is backed up until you resume.";
+    } else if (s.state === "waiting_for_resolve") {
+      main.textContent = "Waiting for DaVinci Resolve";
+      sub.textContent = s.next_run_at ? "Trying again in " + mmss((date(s.next_run_at) - Date.now()) / 1000) : "";
+    } else if (s.state === "outside_active_hours") {
+      const ah = s.config.active_hours || [];
+      main.textContent = `Resting until ${ah[0] || "tomorrow"}`;
+      sub.textContent = ah.length ? `Backups run between ${ah[0]} and ${ah[1]}. Back up now still works.` : "";
+    } else {
+      main.textContent = s.next_run_at ? "Next check in " + mmss((date(s.next_run_at) - Date.now()) / 1000) : "Starting";
+      sub.textContent = last ? lastSummary(last) : "The first check runs as soon as Resolve is reachable.";
+    }
+    // problems
+    fails.replaceChildren();
+    const bad = S.lib ? S.lib.projects.filter((p) => p.status === "failing") : [];
+    for (const p of bad.slice(0, 4)) fails.append(h("li", {}, h("span", { class: "name" }, p.name), h("small", {}, `${plural(p.failures, "failed attempt")}. ${p.last_error || ""}`)));
+    if (bad.length > 4) fails.append(h("li", {}, `and ${bad.length - 4} more`));
+  }
+  function lastSummary(l) {
+    const at = date(l.at);
+    if (l.status !== "ok") return `${STATUS_TEXT[l.status] || l.status} at ${hm(at)}.`;
+    const bits = [`${l.exported} backed up`, `${l.unchanged + l.skipped_old} unchanged`];
+    if (l.failed) bits.push(`${l.failed} failed`); else if (l.failing) bits.push(`${l.failing} still failing`);
+    return `Last check ${hm(at)}: ${bits.join(", ")}. Took ${l.duration_s} s.`;
+  }
+
+  // ---------- render: activity ----------
+  function renderFeed() {
+    const f = $("feed"), stick = f.scrollTop + f.clientHeight >= f.scrollHeight - 24;
+    const list = S.events.filter((e) => !S.problems || e.level === "WARNING" || e.level === "ERROR" || e.level === "CRITICAL");
+    f.replaceChildren();
+    if (!list.length) f.append(h("li", { class: "none", style: "display:block" }, S.problems ? "No problems logged." : "Nothing logged yet."));
+    for (const e of list) f.append(h("li", { class: e.level }, h("time", { class: "num" }, hms(date(e.at))), h("span", { class: "lv" }), h("span", { class: "msg" }, e.msg)));
+    if (stick) f.scrollTop = f.scrollHeight;
+  }
+
+  // ---------- render: timeline ----------
+  const tip = $("tip");
+  function tipShow(ev, text) { tip.textContent = text; tip.hidden = false; const x = Math.min(ev.clientX + 12, innerWidth - tip.offsetWidth - 8); tip.style.left = x + "px"; tip.style.top = (ev.clientY - 38) + "px"; }
+  function tipHide() { tip.hidden = true; }
+  const spanOf = () => { const now = Date.now(), w = S.hours * 3600e3; return { start: now - w, end: now + w * 0.08, now }; };
+  const pct = (t, sp) => ((t - sp.start) / (sp.end - sp.start)) * 100;
+
+  function renderTimeline() {
+    const tl = $("tl"); tl.replaceChildren(); const sp = spanOf();
+    // ruler
+    const step = S.hours <= 6 ? 1 : S.hours <= 24 ? 3 : 24;
+    const first = new Date(sp.start); first.setMinutes(0, 0, 0);
+    if (step === 24) first.setHours(0); else first.setHours(Math.ceil(first.getHours() / step) * step);
+    for (let t = first.getTime(); t < sp.end; t += step * 3600e3) {
+      const d = new Date(t); if (t < sp.start) continue;
+      const midnight = d.getHours() === 0;
+      tl.append(h("div", { class: "tick" + (midnight ? " day" : ""), style: `left:${pct(t, sp)}%` }, h("span", {}, step === 24 ? d.toLocaleDateString(undefined, { weekday: "short", day: "numeric" }) : (midnight ? d.toLocaleDateString(undefined, { weekday: "short" }) + " " : "") + hm(d))));
+    }
+    const lane = h("div", { class: "lane" }); tl.append(lane);
+    const hist = (S.lib && S.lib.history) || [];
+    let drawn = 0;
+    for (const e of hist) {
+      const t = date(e.at).getTime(); if (t < sp.start || t > sp.end) continue;
+      let cls = "bar", height = 8, label;
+      if (e.status !== "ok") { cls += " wait"; height = 16; label = STATUS_TEXT[e.status] || e.status; }
+      else if (e.failed) { cls += " bad"; height = Math.min(64, 24 + e.exported * 8); label = `${plural(e.exported, "project")} backed up, ${e.failed} failed`; }
+      else if (e.exported) { height = Math.min(64, 14 + e.exported * 8); label = `${plural(e.exported, "project")} backed up, ${e.unchanged} unchanged`; }
+      else { cls += " quiet"; height = 6; label = `Checked ${plural(e.seen, "project")}, nothing changed`; }
+      const bar = h("div", { class: cls, style: `left:${pct(t, sp)}%;height:${height}px` });
+      const text = `${hm(new Date(t))}  ${label}`;
+      bar.addEventListener("mousemove", (ev) => tipShow(ev, text)); bar.addEventListener("mouseleave", tipHide);
+      lane.append(bar); drawn++;
+    }
+    const s = S.status;
+    if (s && s.next_run_at) { const t = date(s.next_run_at).getTime(); if (t < sp.end) { const n = h("div", { class: "next", style: `left:${pct(t, sp)}%` }); n.addEventListener("mousemove", (ev) => tipShow(ev, "Next check " + hm(new Date(t)))); n.addEventListener("mouseleave", tipHide); lane.append(n); } }
+    lane.append(h("div", { class: "live", id: "liveSeg", hidden: true }));
+    if (!drawn && S.lib) tl.append(h("div", { class: "empty" }, "No checks in this range yet."));
+    tl.append(h("div", { class: "head", style: `left:${pct(sp.now, sp)}%` }, h("span", { class: "flag num", id: "flag" }, hms(new Date()))));
+    tl.setAttribute("aria-label", `Timeline of backup runs over the last ${S.hours} hours, ${plural(drawn, "run")}`);
+  }
+  function tickClock() {
+    const f = $("flag"); if (f) {
+      f.textContent = hms(new Date());
+      const r = f.getBoundingClientRect();
+      for (const t of document.querySelectorAll(".tl .tick span")) {  // keep ruler labels clear of the clock flag
+        const q = t.getBoundingClientRect();
+        t.style.visibility = (q.right > r.left - 6 && q.left < r.right + 6) ? "hidden" : "";
+      }
+    }
+    const seg = $("liveSeg"), s = S.status;
+    if (seg) {
+      if (s && s.state === "running" && s.cycle) { const sp = spanOf(), a = date(s.cycle.started_at).getTime(); seg.hidden = false; seg.style.left = pct(Math.max(a, sp.start), sp) + "%"; seg.style.width = Math.max(0.3, pct(sp.now, sp) - pct(Math.max(a, sp.start), sp)) + "%"; }
+      else seg.hidden = true;
+    }
+  }
+
+  // ---------- render: projects ----------
+  function renderRows() {
+    const body = $("rows"); body.replaceChildren();
+    if (!S.lib) { body.append(h("tr", {}, h("td", { colspan: 5, class: "none" }, "Loading"))); return; }
+    const q = S.q.trim().toLowerCase();
+    let rows = S.lib.projects.filter((p) => (!q || (p.folder + "/" + p.name).toLowerCase().includes(q)) &&
+      (S.filter === "all" || (S.filter === "attention" && p.status === "failing") || (S.filter === "ok" && p.status === "ok") || (S.filter === "old" && p.status === "not_changed_recently")));
+    const { k, dir } = S.sort;
+    rows.sort((a, b) => { const x = a[k], y = b[k]; if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
+    if (!rows.length) {
+      body.append(h("tr", {}, h("td", { colspan: 5, class: "none" }, S.lib.projects.length ? "No projects match." : "No projects yet. After the first check with Resolve open, your projects appear here.")));
+      return;
+    }
+    for (const p of rows) {
+      const st = { ok: "Backed up", failing: "Failing", not_changed_recently: "Not changed recently" }[p.status];
+      body.append(h("tr", {},
+        h("td", {}, h("span", { class: "name" }, p.name), p.folder ? h("small", {}, p.folder) : null),
+        h("td", { title: p.last_backup ? date(p.last_backup).toLocaleString() : "" }, ago(date(p.last_backup))),
+        h("td", {}, p.last_modified || ""),
+        h("td", { class: "r num" }, bytes(p.size)),
+        h("td", {}, h("span", { class: "chip " + p.status }, h("i"), st), p.status === "failing" ? h("small", {}, p.last_error || "") : null)));
+    }
+  }
+  function renderFoot() {
+    const f = $("foot"); f.replaceChildren(); if (!S.lib) return;
+    const st = S.lib.storage, s = S.status;
+    f.append(h("span", {}, `${plural(st.files, "backup")} using ${bytes(st.bytes)}`), h("span", {}, "In ", h("b", { style: "font-weight:500;color:var(--text)" }, st.dir)));
+    if (st.free_bytes != null) f.append(h("span", {}, `${bytes(st.free_bytes)} free on that disk`));
+    if (s && s.config) f.append(h("span", {}, `Checks every ${plural(s.config.interval_minutes, "minute")}`));
+  }
+
+  // ---------- polling ----------
+  async function pollStatus() {
+    let delay = document.hidden ? 4000 : 1000;
+    try {
+      const prevAt = S.status && S.status.last_cycle && S.status.last_cycle.at;
+      const d = await api("/api/status?since=" + S.seq);
+      if (d.event_seq < S.seq) { S.events = []; }
+      S.events = S.events.concat(d.events).slice(-300); S.seq = d.event_seq;
+      S.status = d; S.offline = false; S.denied = false;
+      if (d.events.length) renderFeed();
+      if ((d.last_cycle && d.last_cycle.at) !== prevAt) pollLibrary();
+    } catch (e) { if (e.status === 401) { S.denied = true; delay = 5000; } else S.offline = true; }
+    renderHeader(); renderNow(); tickClock();
+    setTimeout(pollStatus, delay);
+  }
+  async function pollLibrary(loop) {
+    try {
+      const d = await api("/api/library");
+      const sig = JSON.stringify(d);
+      if (sig !== S.libSig) { S.libSig = sig; S.lib = d; renderRows(); renderFoot(); renderTimeline(); renderNow(); }
+      else renderTimeline();
+    } catch (e) { /* status poll reports problems */ }
+    if (loop) setTimeout(() => pollLibrary(true), document.hidden ? 15000 : 5000);
+  }
+
+  // ---------- controls ----------
+  $("runNow").addEventListener("click", async () => { $("runNow").disabled = true; try { await api("/api/run-now", {}); } catch (e) { /* status shows */ } });
+  $("pause").addEventListener("click", async () => { try { await api("/api/pause", { paused: !(S.status && S.status.paused) }); } catch (e) { /* shown by status */ } });
+  $("range").addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (!b) return; S.hours = +b.dataset.w; for (const x of $("range").children) x.setAttribute("aria-pressed", String(x === b)); renderTimeline(); });
+  $("onlyProblems").addEventListener("change", (ev) => { S.problems = ev.target.checked; renderFeed(); });
+  $("q").addEventListener("input", (ev) => { S.q = ev.target.value; renderRows(); });
+  $("flt").addEventListener("change", (ev) => { S.filter = ev.target.value; renderRows(); });
+  document.querySelector("thead").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button"); if (!b) return; const k = b.dataset.k;
+    S.sort = { k, dir: S.sort.k === k ? -S.sort.dir : (k === "name" || k === "status" ? 1 : -1) };
+    for (const th of document.querySelectorAll("th")) { th.setAttribute("aria-sort", "none"); const bb = th.querySelector("button"); delete bb.dataset.arrow; }
+    b.parentElement.setAttribute("aria-sort", S.sort.dir > 0 ? "ascending" : "descending"); b.dataset.arrow = S.sort.dir > 0 ? "↑" : "↓";
+    renderRows();
+  });
+
+  // ---------- settings drawer ----------
+  const FIELDS = ["backup_dir", "interval_minutes", "load_to_export", "initial_lookback_days", "keep_all_hours", "keep_daily_days", "db_name", "hours_on", "hours_from", "hours_to", "include", "exclude"];
+  let initial = "", opener = null;
+  const lines = (id) => $(id).value.split("\n").map((x) => x.trim()).filter(Boolean);
+  function collect() {
+    return {
+      backup_dir: $("backup_dir").value.trim(), interval_minutes: Number($("interval_minutes").value),
+      active_hours: $("hours_on").checked ? [$("hours_from").value, $("hours_to").value] : null,
+      load_to_export: $("load_to_export").value, include: lines("include"), exclude: lines("exclude"),
+      initial_lookback_days: Number($("initial_lookback_days").value),
+      retention: { keep_all_hours: Number($("keep_all_hours").value), keep_daily_days: Number($("keep_daily_days").value) },
+      database: { name: $("db_name").value.trim() || null, type: null },
+    };
+  }
+  function fill(s) {
+    $("backup_dir").value = s.backup_dir; $("interval_minutes").value = s.interval_minutes; $("load_to_export").value = s.load_to_export;
+    $("initial_lookback_days").value = s.initial_lookback_days; $("keep_all_hours").value = s.retention.keep_all_hours; $("keep_daily_days").value = s.retention.keep_daily_days;
+    $("db_name").value = (s.database && s.database.name) || ""; $("include").value = s.include.join("\n"); $("exclude").value = s.exclude.join("\n");
+    $("hours_on").checked = !!s.active_hours; $("hours_from").value = s.active_hours ? s.active_hours[0] : "07:00"; $("hours_to").value = s.active_hours ? s.active_hours[1] : "22:00";
+    syncHours();
+  }
+  const syncHours = () => { $("hours_from").disabled = $("hours_to").disabled = !$("hours_on").checked; };
+  const dirty = () => { $("save").disabled = JSON.stringify(collect()) === initial; };
+  async function openSettings() {
+    opener = document.activeElement;
+    try {
+      const d = await api("/api/settings"); fill(d.settings);
+      $("cfgPath").textContent = "More options, such as alerts and the dashboard port, are in " + d.config_path;
+      initial = JSON.stringify(collect()); $("save").disabled = true; $("saveMsg").textContent = ""; $("saveMsg").className = "";
+      for (const e of document.querySelectorAll("[data-err]")) e.textContent = "";
+    } catch (e) { return; }
+    document.body.classList.add("open"); $("drawer").setAttribute("aria-hidden", "false"); $("backup_dir").focus();
+  }
+  function closeSettings() { document.body.classList.remove("open"); $("drawer").setAttribute("aria-hidden", "true"); if (opener) opener.focus(); }
+  $("openSettings").addEventListener("click", openSettings);
+  $("closeSettings").addEventListener("click", closeSettings);
+  $("scrim").addEventListener("click", closeSettings);
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && document.body.classList.contains("open")) closeSettings(); });
+  $("form").addEventListener("input", () => { syncHours(); dirty(); });
+  $("form").addEventListener("submit", (ev) => ev.preventDefault());
+  $("hours_on").addEventListener("change", () => { syncHours(); dirty(); });
+  $("save").addEventListener("click", async () => {
+    const msg = $("saveMsg"); msg.className = ""; msg.textContent = "Saving";
+    for (const e of document.querySelectorAll("[data-err]")) e.textContent = "";
+    try {
+      const r = await api("/api/settings", collect()); initial = JSON.stringify(collect()); $("save").disabled = true;
+      msg.className = "ok"; msg.textContent = r.message;
+    } catch (e) {
+      msg.className = "bad"; msg.textContent = "Not saved. Check the highlighted fields.";
+      const errs = (e.data && e.data.errors) || {};
+      for (const [k, v] of Object.entries(errs)) { const t = document.querySelector(`[data-err="${CSS.escape(k)}"]`); if (t) t.textContent = v; else msg.textContent = `Not saved: ${v}`; }
+    }
+  });
+
+  // ---------- go ----------
+  renderTimeline(); renderRows(); renderFeed();
+  setInterval(() => { renderNow(); tickClock(); }, 1000);
+  setInterval(renderTimeline, 15000);
+  pollStatus(); pollLibrary(true);
+})();
+</script>
+</body>
+</html>

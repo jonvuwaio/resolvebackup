@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.build-venv/
+.icon.iconset/
+.icon.icns
+build/
+dist/
+*.spec
