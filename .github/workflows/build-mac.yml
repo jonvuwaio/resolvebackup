@@ -5,7 +5,15 @@ on:
     tags: ["v*"]
 jobs:
   build:
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14          # Apple Silicon (arm64)
+            artifact: Resolve-Backup-mac
+          - runner: macos-15-intel    # Intel (x86_64)
+            artifact: Resolve-Backup-mac-intel
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -15,5 +23,5 @@ jobs:
       - run: ./build_mac_app.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: Resolve-Backup-mac
+          name: ${{ matrix.artifact }}
           path: dist/Resolve-Backup.zip
