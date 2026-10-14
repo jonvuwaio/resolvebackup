@@ -352,6 +352,23 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(s["status"], "project_open_cannot_switch")
         self.assertEqual(self.pm.open, "Mine")
 
+    def test_each_database_checked_is_remembered(self):
+        cloud = {"DbType": "PostgreSQL", "DbName": "db_aaa", "IpAddress": "a.rds.amazonaws.com"}
+        self.pm.db = cloud
+        self.pm.add(["Client A"], "P", stamp(self.now, hours=1))
+        self.pm.add(["Client B"], "Q", stamp(self.now, hours=1))
+        b = self.backup()
+        b.cycle()
+        self.pm.SetCurrentDatabase(self.pm.dbs[1])  # the user opens another library in Resolve
+        self.clock.advance(hours=1)
+        b.cycle()
+        dbs = b.load_state()["databases"]
+        self.assertEqual(set(dbs), {"db_aaa@a.rds.amazonaws.com", "Local@"})
+        rec = dbs["db_aaa@a.rds.amazonaws.com"]
+        self.assertEqual((rec["projects"], rec["folders"], rec["last_checked"]),
+                         (2, ["Client A", "Client B"], self.now.isoformat()))
+        self.assertEqual(dbs["Local@"]["last_checked"], (self.now + dt.timedelta(hours=1)).isoformat())
+
     def test_unknown_database(self):
         self.assertEqual(self.backup(database={"name": "Nope"}).cycle()["status"], "database_not_found")
 

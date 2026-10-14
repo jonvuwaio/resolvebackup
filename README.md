@@ -95,6 +95,14 @@ python3 resolve_cloud_backup.py status
 `list` shows the exact `DbType`/`DbName` of your cloud database and the format of `lastModifiedDate`. If your
 cloud database isn't the one currently selected in Resolve, set it in the config (below).
 
+**Several cloud libraries.** Only the library that's open in Resolve can be backed up. Resolve's scripting API
+can't list cloud libraries (in Resolve 21 one appears only as the current database, reported as `PostgreSQL` on an
+AWS address), and `SetCurrentDatabase` refuses to switch into one. A script can switch *out* of a cloud library
+but not back, so this app never switches away from one. Each library you open is backed up into its own folder
+(named after its `db_…` database name), and the dashboard's **Libraries** section lists every library it has
+checked. The section shows each library's top-level folders and when it was last checked, and flags any library not
+opened for over 7 days.
+
 Logs: `app dir/logs/backup.log` — macOS `~/Library/Application Support/resolve-cloud-backup`,
 Windows `%APPDATA%\resolve-cloud-backup`, Linux `~/.config/resolve-cloud-backup`.
 

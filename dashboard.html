@@ -129,6 +129,7 @@ td small { display: block; color: var(--dim); }
 .chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .chip.ok i { background: var(--ok); } .chip.failing i { background: var(--bad); }
 .chip.failing { color: var(--bad); }
+.chip.current i { background: var(--run); } .chip.stale i { background: var(--wait); }
 .scroll { overflow-x: auto; }
 [hidden] { display: none !important; }
 .foot { margin-top: 28px; color: var(--dim); display: flex; gap: 6px 28px; flex-wrap: wrap; }
@@ -223,6 +224,15 @@ body.open #drawer { transform: none; visibility: visible; }
       <ul id="feed" aria-live="off"></ul>
     </section>
   </div>
+
+  <section class="lib" aria-labelledby="dbH" id="dbSection" hidden>
+    <div class="lib-head"><h2 id="dbH">Libraries</h2></div>
+    <p class="hint" style="margin:0 0 10px;color:var(--dim)">Resolve only lets this app back up the library that's open. To back up another, open it in Resolve's Project Manager.</p>
+    <div class="scroll"><table id="dbTbl">
+      <thead><tr><th>Library</th><th class="r">Projects</th><th>Last checked</th><th>Status</th></tr></thead>
+      <tbody id="dbRows"></tbody>
+    </table></div>
+  </section>
 
   <section class="lib" aria-labelledby="libH">
     <div class="lib-head">
@@ -539,6 +549,26 @@ body.open #drawer { transform: none; visibility: visible; }
         h("td", {}, h("span", { class: "chip " + p.status }, h("i"), st), p.status === "failing" ? h("small", {}, p.last_error || "") : null)));
     }
   }
+  // ---------- render: libraries ----------
+  const STALE_DAYS = 7;
+  const dbLabel = (d) => (d.DbType === "Cloud" || /\.rds\.amazonaws\.com$/.test(d.IpAddress || "")) ? "Blackmagic Cloud library"
+    : d.DbType === "Disk" ? "Local database" : `${d.DbType || "Database"} on ${d.IpAddress || "this Mac"}`;
+  const dbFolders = (d) => { const f = d.folders || []; if (!f.length) return "No folders"; const more = f.length - 3; return f.slice(0, 3).join(", ") + (more > 0 ? ` and ${plural(more, "more folder")}` : ""); };
+  function renderLibraries() {
+    const dbs = (S.lib && S.lib.databases) || [], body = $("dbRows");
+    $("dbSection").hidden = !dbs.length; body.replaceChildren();
+    const cur = S.status && S.status.resolve && S.status.resolve.connected ? S.status.resolve.database : null;
+    for (const d of dbs.slice().sort((a, b) => (b.last_checked || "").localeCompare(a.last_checked || ""))) {
+      const last = date(d.last_checked), days = last ? (Date.now() - last.getTime()) / 864e5 : Infinity;
+      const chip = d.DbName === cur ? ["current", "Open in Resolve"]
+        : days > STALE_DAYS ? ["stale", `Not opened for ${plural(Math.floor(days), "day")}`] : ["ok", "Backed up recently"];
+      body.append(h("tr", {},
+        h("td", {}, h("span", { class: "name" }, dbLabel(d)), h("small", { title: d.DbName || "" }, dbFolders(d))),
+        h("td", { class: "r num" }, d.projects ?? ""),
+        h("td", { title: last ? last.toLocaleString() : "" }, ago(last)),
+        h("td", {}, h("span", { class: "chip " + chip[0] }, h("i"), chip[1]))));
+    }
+  }
   function renderFoot() {
     const f = $("foot"); f.replaceChildren(); if (!S.lib) return;
     const st = S.lib.storage, s = S.status;
@@ -552,12 +582,14 @@ body.open #drawer { transform: none; visibility: visible; }
     let delay = document.hidden ? 4000 : 1000;
     try {
       const prevAt = S.status && S.status.last_cycle && S.status.last_cycle.at;
+      const prevDb = S.status && S.status.resolve && S.status.resolve.database;
       const d = await api("/api/status?since=" + S.seq);
       if (d.event_seq < S.seq) { S.events = []; }
       S.events = S.events.concat(d.events).slice(-300); S.seq = d.event_seq;
       S.status = d; S.offline = false; S.denied = false;
       if (d.events.length) renderFeed();
       if ((d.last_cycle && d.last_cycle.at) !== prevAt) pollLibrary();
+      if ((d.resolve && d.resolve.database) !== prevDb) renderLibraries();
     } catch (e) { if (e.status === 401) { S.denied = true; delay = 5000; } else S.offline = true; }
     renderHeader(); renderNow(); tickClock();
     setTimeout(pollStatus, delay);
@@ -566,7 +598,7 @@ body.open #drawer { transform: none; visibility: visible; }
     try {
       const d = await api("/api/library");
       const sig = JSON.stringify(d);
-      if (sig !== S.libSig) { S.libSig = sig; S.lib = d; renderRows(); renderFoot(); renderTimeline(); renderNow(); }
+      if (sig !== S.libSig) { S.libSig = sig; S.lib = d; renderLibraries(); renderRows(); renderFoot(); renderTimeline(); renderNow(); }
       else renderTimeline();
     } catch (e) { /* status poll reports problems */ }
     if (loop) setTimeout(() => pollLibrary(true), document.hidden ? 15000 : 5000);

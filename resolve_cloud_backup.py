@@ -58,7 +58,7 @@ import webbrowser
 from pathlib import Path
 
 APP = "resolve-cloud-backup"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -658,7 +658,18 @@ class Backup:
             except Exception as e:  # noqa: BLE001
                 log.warning("Could not restore Resolve's previous location: %s", e)
             self._retention(ctx["touched"], now, state)
+        self._remember_database(target, ctx, state)
         return self._finish(stats, state)
+
+    def _remember_database(self, db: dict, ctx: dict, state: dict) -> None:
+        """Record each database (cloud library) checked. Scripts can't switch into a cloud library, so one is
+        only backed up while it is open in Resolve; this lets the dashboard show libraries going stale."""
+        key = f"{db.get('DbName') or 'default'}@{db.get('IpAddress') or ''}"
+        at = ctx["now"].isoformat(timespec="seconds")
+        rec = state.setdefault("databases", {}).setdefault(key, {"first_seen": at})
+        rec.update({k: db.get(k) for k in ("DbType", "DbName", "IpAddress")}, last_checked=at,
+                   projects=sum(1 for k in state["projects"] if k.startswith(f"{ctx['db']}::")),
+                   folders=ctx.get("top_folders", []))
 
     def _finish(self, stats: dict, state: dict) -> dict:
         at = self.clock().isoformat(timespec="seconds")
@@ -694,7 +705,10 @@ class Backup:
         names += [n for n in attrs if n not in names]
         for name in names:
             self._handle(pm, path, name, attrs.get(name) or {}, ctx)
-        for folder in list(pm.GetFolderListInCurrentFolder() or []):
+        folders = list(pm.GetFolderListInCurrentFolder() or [])
+        if depth == 0:
+            ctx["top_folders"] = folders[:50]
+        for folder in folders:
             if not pm.OpenFolder(folder):
                 log.warning("Could not open folder %r", folder)
                 continue
@@ -1153,7 +1167,10 @@ class DashboardServer:
                          "last_backup": v.get("last_backup"), "last_modified": v.get("last_modified"),
                          "failures": v.get("failures", 0), "last_error": v.get("last_error"),
                          "next_try": v.get("next_try"), "size": size})
-        return {"projects": rows, "history": st.get("history", [])[-400:], "storage": self._storage()}
+        dbs = [{k: v.get(k) for k in ("DbType", "DbName", "IpAddress", "first_seen", "last_checked", "projects",
+                                      "folders")} for v in st.get("databases", {}).values()]
+        return {"projects": rows, "databases": dbs, "history": st.get("history", [])[-400:],
+                "storage": self._storage()}
 
     def settings_payload(self) -> dict:
         cfg = self.svc.cfg

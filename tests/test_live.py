@@ -287,6 +287,9 @@ class DashboardTests(LiveBase):
         self.assertEqual(by["Old"]["status"], "not_changed_recently")
         self.assertEqual(len(lib["history"]), 1)
         self.assertEqual(lib["storage"]["files"], 1)
+        [db] = lib["databases"]
+        self.assertEqual((db["DbName"], db["projects"], db["folders"]), ("Studio Cloud", 2, ["Client"]))
+        self.assertTrue(db["last_checked"])
 
     def test_failing_project_reported(self):
         self.pm.add([], "Bad", stamp(self.clock.t, minutes=1))
