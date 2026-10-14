@@ -58,7 +58,7 @@ import webbrowser
 from pathlib import Path
 
 APP = "resolve-cloud-backup"
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 

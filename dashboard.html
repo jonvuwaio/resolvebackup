@@ -152,6 +152,7 @@ body.open #drawer { transform: none; visibility: visible; }
 .f .row { display: flex; gap: 10px; align-items: center; }
 .f .row > * { flex: 1; min-width: 0; }
 .f .row > span { flex: none; color: var(--dim); }
+.f .num-row > input[type=number] { flex: none; width: 7.5em; }
 .check { display: flex; gap: 8px; align-items: center; font-weight: 500; }
 #drawer footer { padding: 14px 24px; border-top: 1px solid var(--line); display: flex; gap: 12px; align-items: center; }
 #saveMsg { color: var(--dim); flex: 1; }
@@ -296,10 +297,11 @@ body.open #drawer { transform: none; visibility: visible; }
       <div class="row"><input type="number" id="initial_lookback_days" min="1" max="3650"><span>days</span></div>
       <div class="err" data-err="initial_lookback_days"></div></div>
     <div class="f"><span class="lab">Keep backups</span>
-      <div class="row"><input type="number" id="keep_all_hours" min="1" max="8760" aria-label="Hours to keep every backup"><span>hours of every backup, then one a day for</span><input type="number" id="keep_daily_days" min="0" max="3650" aria-label="Days to keep daily backups"><span>days</span></div>
+      <div class="row num-row"><span>Every backup for</span><input type="number" id="keep_all_hours" min="1" max="8760" aria-label="Hours to keep every backup"><span>hours</span></div>
+      <div class="row num-row" style="margin-top:8px"><span>then one a day for</span><input type="number" id="keep_daily_days" min="0" max="3650" aria-label="Days to keep daily backups"><span>days</span></div>
       <div class="err" data-err="retention.keep_all_hours"></div><div class="err" data-err="retention.keep_daily_days"></div></div>
     <div class="f"><label class="check"><input type="checkbox" id="max_on"> Never keep more than</label>
-      <div class="row" style="margin-top:8px"><input type="number" id="max_backups" min="1" max="10000" aria-label="Most backups to keep per project"><span>backups of each project</span></div>
+      <div class="row num-row" style="margin-top:8px"><input type="number" id="max_backups" min="1" max="10000" aria-label="Most backups to keep per project"><span>backups of each project</span></div>
       <div class="hint">The oldest are deleted first. This applies on top of the time rules above.</div>
       <div class="err" data-err="retention.max_backups"></div></div>
     <div class="f"><label for="db_name">Database</label>
