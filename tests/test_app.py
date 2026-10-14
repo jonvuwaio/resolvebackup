@@ -21,10 +21,11 @@ class RunnerTests(unittest.TestCase):
         p = mock.patch.object(rcb, "app_dir", lambda: self.d)
         p.start()
         self.addCleanup(p.stop)
-        # Never reach a real DaVinci Resolve that happens to be running on the test machine.
-        c = mock.patch.object(rcb, "connect_resolve", lambda cfg: None)
-        c.start()
-        self.addCleanup(c.stop)
+        # Never reach a real DaVinci Resolve (or its logs) that happens to be on the test machine.
+        for target, value in (("connect_resolve", lambda cfg: None), ("resolve_log_dirs", lambda: [])):
+            c = mock.patch.object(rcb, target, value)
+            c.start()
+            self.addCleanup(c.stop)
         self.addCleanup(self.tmp.cleanup)
 
     def test_runner_starts_serves_and_stops_cleanly(self):

@@ -58,7 +58,7 @@ import webbrowser
 from pathlib import Path
 
 APP = "resolve-cloud-backup"
-VERSION = "1.3.1"
+VERSION = "1.4.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -140,6 +140,47 @@ def app_dir() -> Path:
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     return base / APP
+
+
+def resolve_log_dirs() -> list[Path]:
+    """Where DaVinci Resolve writes its own logs (ResolveDebug.txt)."""
+    if SYSTEM == "Darwin":
+        return [Path.home() / "Library/Application Support/Blackmagic Design/DaVinci Resolve/logs"]
+    if SYSTEM == "Windows":
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+        return [base / "Blackmagic Design/DaVinci Resolve/Support/logs", base / "Blackmagic Design/DaVinci Resolve/logs"]
+    return [Path.home() / ".local/share/DaVinciResolve/logs"]
+
+
+# Resolve logs every Blackmagic Cloud library the signed-in user can see, e.g.
+#   BlackmagicID: PL(c31fb696-ac7b-4ad7-90cf-73708407fb40:'WashOrgSrvrDB_1':D)
+# and the scripting API reports the same library as DbName "db_c31fb696ac7b4ad790cf73708407fb40".
+_LIBRARY_RE = re.compile(rb"PL\(([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}):'([^'\r\n]{1,200})':")
+_log_cache: dict = {}
+
+
+def cloud_library_names(dirs: list[Path] | None = None) -> dict[str, str]:
+    """{"db_<hex>": "Library name"} for the cloud libraries named in Resolve's logs (newest log wins).
+    Resolve's scripting API has no call for a library's name, so this is the only source."""
+    files = []
+    for d in dirs if dirs is not None else resolve_log_dirs():
+        for pattern in ("ResolveDebug*.txt", "LogArchive/ResolveDebug*.txt"):
+            files += [f for f in d.glob(pattern) if f.is_file()]
+    names: dict[str, str] = {}
+    for f in sorted(files, key=lambda f: f.stat().st_mtime):
+        try:
+            st = f.stat()
+            sig = (st.st_mtime_ns, st.st_size)
+            if _log_cache.get(f, (None,))[0] != sig:
+                found = {}
+                with open(f, "rb") as fh:
+                    for m in _LIBRARY_RE.finditer(fh.read()):
+                        found["db_" + m.group(1).decode().replace("-", "").lower()] = m.group(2).decode("utf-8", "replace")
+                _log_cache[f] = (sig, found)
+            names.update(_log_cache[f][1])
+        except OSError:
+            continue
+    return names
 
 
 def default_config_path() -> Path:
@@ -530,8 +571,9 @@ def apply_settings(path: Path | None, clean: dict) -> None:
 # ------------------------------------------------------------------------- backup
 class Backup:
     def __init__(self, cfg: dict, state_file: Path, connect=None, clock=None, sleep=None, alert=None,
-                 status: LiveStatus | None = None):
+                 status: LiveStatus | None = None, library_names=None):
         self.cfg = cfg
+        self.library_names = library_names or cloud_library_names
         self.alert = alert or self._run_alert
         self.state_file = Path(state_file)
         self.connect = connect or connect_resolve
@@ -614,6 +656,7 @@ class Backup:
         except Exception:  # noqa: BLE001
             version = None
         self.status.set(resolve={"connected": True, "version": version, "database": orig_db.get("DbName"),
+                                 "library": self.known_library_names(state).get(orig_db.get("DbName")),
                                  "database_type": orig_db.get("DbType"), "open_project": open_name})
         self.status.update_cycle(phase="scanning")
 
@@ -647,6 +690,7 @@ class Backup:
 
         orig_path = [] if switched else current_folder_path(pm)
         ctx = {"pm": pm, "state": state, "stats": stats, "now": now, "db": target.get("DbName") or "default",
+               "folder": self._library_folder(target, state),
                "open_name": open_name, "can_load": open_name is None, "exports": 0, "touched": set()}
         try:
             if open_name and self.cfg["save_open_project"]:
@@ -665,12 +709,54 @@ class Backup:
         self._remember_database(target, ctx, state)
         return self._finish(stats, state)
 
+    # ---- library names and folders
+    @staticmethod
+    def _db_key(db: dict) -> str:
+        return f"{db.get('DbName') or 'default'}@{db.get('IpAddress') or ''}"
+
+    def known_library_names(self, state: dict) -> dict[str, str]:
+        """Names from Resolve's logs, remembered in state so they outlive Resolve's log rotation."""
+        names = state.setdefault("library_names", {})
+        try:
+            names.update(self.library_names())
+        except Exception as e:  # noqa: BLE001
+            log.debug("Could not read cloud library names from Resolve's logs: %s", e)
+        return names
+
+    def _library_folder(self, db: dict, state: dict) -> str:
+        """Backup folder for a database: the library's name as shown in Resolve. A folder made earlier under
+        another name (the internal db_... name, or before the library was renamed) is renamed to match."""
+        db_name = db.get("DbName") or "default"
+        name = self.known_library_names(state).get(db_name, db_name)
+        recs = state.setdefault("databases", {})
+        key = self._db_key(db)
+        if any(r.get("folder") == name for k, r in recs.items() if k != key):
+            name = f"{name} ({db_name[-6:]})"  # two libraries with the same name
+        old = (recs.get(key) or {}).get("folder") or db_name
+        if old != name:
+            src, dst = self.root / safe_name(old), self.root / safe_name(name)
+            if src.is_dir() and not dst.exists():
+                try:
+                    os.rename(src, dst)
+                    log.info("Renamed backup folder %s -> %s", src.name, dst.name)
+                    for k, v in state["projects"].items():
+                        if k.startswith(f"{db_name}::") and v.get("last_file", "").startswith(str(src) + os.sep):
+                            v["last_file"] = str(dst) + v["last_file"][len(str(src)):]
+                except OSError as e:
+                    log.warning("Could not rename backup folder %s to %s: %s", src, dst, e)
+                    name = old
+            elif src.is_dir():
+                log.warning("Not renaming backup folder %s: %s already exists", src, dst)
+                name = old
+        recs.setdefault(key, {})["folder"] = name
+        return name
+
     def _remember_database(self, db: dict, ctx: dict, state: dict) -> None:
         """Record each database (cloud library) checked. Scripts can't switch into a cloud library, so one is
         only backed up while it is open in Resolve; this lets the dashboard show libraries going stale."""
-        key = f"{db.get('DbName') or 'default'}@{db.get('IpAddress') or ''}"
         at = ctx["now"].isoformat(timespec="seconds")
-        rec = state.setdefault("databases", {}).setdefault(key, {"first_seen": at})
+        rec = state.setdefault("databases", {}).setdefault(self._db_key(db), {})
+        rec.setdefault("first_seen", at)
         rec.update({k: db.get(k) for k in ("DbType", "DbName", "IpAddress")}, last_checked=at,
                    projects=sum(1 for k in state["projects"] if k.startswith(f"{ctx['db']}::")),
                    folders=ctx.get("top_folders", []))
@@ -787,15 +873,15 @@ class Backup:
             (log.error if n >= self.cfg["alert_after_failures"] else log.warning)(
                 "Export failed for %s (%d consecutive; retry in %d min): %s", full, n, wait, reason)
             if n == self.cfg["alert_after_failures"]:
-                self.alert(full, ctx["db"], n, reason)
+                self.alert(full, ctx["folder"], n, reason)
         self._progress(stats, current=full, phase="scanning")
         self.save_state(state)
         if self.cfg["pause_between_exports_seconds"]:
             self.sleep(self.cfg["pause_between_exports_seconds"])
 
     # ---- export
-    def project_dir(self, db: str, path: list[str], name: str) -> Path:
-        return self.root.joinpath(safe_name(db), *[safe_name(p) for p in path], safe_name(name))
+    def project_dir(self, folder: str, path: list[str], name: str) -> Path:
+        return self.root.joinpath(safe_name(folder), *[safe_name(p) for p in path], safe_name(name))
 
     def _direct(self, pm, name: str, tmp: Path) -> bool:
         try:
@@ -835,7 +921,7 @@ class Backup:
 
     def _export(self, pm, path: list[str], name: str, ctx: dict, collab: bool = False):
         """Returns (final_path | None, failure_reason)."""
-        dest = self.project_dir(ctx["db"], path, name)
+        dest = self.project_dir(ctx["folder"], path, name)
         dest.mkdir(parents=True, exist_ok=True)
         base = f"{safe_name(name)}__{ctx['now'].strftime('%Y%m%d-%H%M%S')}"
         final, n = dest / f"{base}.drp", 0
@@ -1172,8 +1258,14 @@ class DashboardServer:
                          "last_backup": v.get("last_backup"), "last_modified": v.get("last_modified"),
                          "failures": v.get("failures", 0), "last_error": v.get("last_error"),
                          "next_try": v.get("next_try"), "size": size})
-        dbs = [{k: v.get(k) for k in ("DbType", "DbName", "IpAddress", "first_seen", "last_checked", "projects",
-                                      "folders")} for v in st.get("databases", {}).values()]
+        names = st.get("library_names", {})
+        dbs = [{**{k: v.get(k) for k in ("DbType", "DbName", "IpAddress", "first_seen", "last_checked", "projects",
+                                         "folders", "folder")}, "name": names.get(v.get("DbName"), v.get("DbName"))}
+               for v in st.get("databases", {}).values() if v.get("DbName")]
+        checked = {d["DbName"] for d in dbs}
+        # Cloud libraries the signed-in user can see but that haven't been open in Resolve while this app ran.
+        dbs += [{"DbType": "Cloud", "DbName": k, "name": n, "last_checked": None} for k, n in names.items()
+                if k not in checked]
         return {"projects": rows, "databases": dbs, "history": st.get("history", [])[-400:],
                 "storage": self._storage()}
 

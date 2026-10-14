@@ -99,9 +99,15 @@ cloud database isn't the one currently selected in Resolve, set it in the config
 can't list cloud libraries (in Resolve 21 one appears only as the current database, reported as `PostgreSQL` on an
 AWS address), and `SetCurrentDatabase` refuses to switch into one. A script can switch *out* of a cloud library
 but not back, so this app never switches away from one. Each library you open is backed up into its own folder
-(named after its `db_…` database name), and the dashboard's **Libraries** section lists every library it has
-checked. The section shows each library's top-level folders and when it was last checked, and flags any library not
-opened for over 7 days.
+named after the library.
+
+The API only reports a cloud library by an internal name (`db_<id>`). The real name comes from the line
+`BlackmagicID: PL(<id>:'<name>':…)` that Resolve writes to its own log (`ResolveDebug.txt`) for every library your
+account can see. Names are remembered, so they survive Resolve's log rotation. A folder created under the internal
+name, or under an old name after a library is renamed, is renamed to match on the next check. It is never merged
+into an existing folder. Projects are tracked by the internal id, so a rename doesn't trigger fresh exports. The
+dashboard's **Libraries** section lists every library your account can see. For each one it shows the top-level
+folders, when it was last checked, and whether it's open now, not opened for over 7 days, or never backed up.
 
 Logs: `app dir/logs/backup.log` — macOS `~/Library/Application Support/resolve-cloud-backup`,
 Windows `%APPDATA%\resolve-cloud-backup`, Linux `~/.config/resolve-cloud-backup`.

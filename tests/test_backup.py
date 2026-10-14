@@ -122,6 +122,10 @@ class BackupTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.now = dt.datetime(2026, 10, 13, 12, 0, 0)
+        self.logs = self.tmp / "resolve-logs"  # stands in for Resolve's own log folder
+        orig_dirs = rcb.resolve_log_dirs
+        rcb.resolve_log_dirs = lambda: [self.logs]
+        self.addCleanup(setattr, rcb, "resolve_log_dirs", orig_dirs)
         self.clock = Clock(self.now)
         self.pm = FakePM()
         self.cfg = json.loads(json.dumps(rcb.DEFAULTS))
@@ -368,6 +372,69 @@ class BackupTests(unittest.TestCase):
         self.assertEqual((rec["projects"], rec["folders"], rec["last_checked"]),
                          (2, ["Client A", "Client B"], self.now.isoformat()))
         self.assertEqual(dbs["Local@"]["last_checked"], (self.now + dt.timedelta(hours=1)).isoformat())
+
+    # ---- cloud library names (from Resolve's own logs)
+    CLOUD = {"DbType": "PostgreSQL", "DbName": "db_c31fb696ac7b4ad790cf73708407fb40", "IpAddress": "x.rds.amazonaws.com"}
+
+    def write_resolve_log(self, *libs, name="ResolveDebug.txt"):
+        self.logs.mkdir(parents=True, exist_ok=True)
+        lines = [f"0x7 | SyManager | INFO  | 2026-10-14 09:49:28,546 | BlackmagicID: PL({u}:'{n}':D)" for u, n in libs]
+        (self.logs / name).write_text("noise\n" + "\n".join(lines) + "\n")
+
+    def test_library_names_from_resolve_log(self):
+        self.write_resolve_log(("c31fb696-ac7b-4ad7-90cf-73708407fb40", "WashOrgSrvrDB_1"),
+                               ("0af96a7b-28e8-4037-9211-489e97dd6489", "WashOrgBackup_1"))
+        self.assertEqual(rcb.cloud_library_names([self.logs]),
+                         {"db_c31fb696ac7b4ad790cf73708407fb40": "WashOrgSrvrDB_1",
+                          "db_0af96a7b28e840379211489e97dd6489": "WashOrgBackup_1"})
+        self.assertEqual(rcb.cloud_library_names([self.tmp / "missing"]), {})
+
+    def test_backups_go_in_a_folder_named_after_the_library(self):
+        self.write_resolve_log(("c31fb696-ac7b-4ad7-90cf-73708407fb40", "WashOrgSrvrDB_1"))
+        self.pm.db = self.CLOUD
+        self.pm.add(["Client"], "P", stamp(self.now, hours=1))
+        b = self.backup()
+        b.cycle()
+        [f] = self.files()
+        self.assertEqual(f.relative_to(self.tmp / "out").parts[:2], ("WashOrgSrvrDB_1", "Client"))
+        st = b.load_state()
+        self.assertIn("db_c31fb696ac7b4ad790cf73708407fb40::Client/P", st["projects"])  # keyed by the stable id
+        self.assertEqual(self.status_of(b)["library"], "WashOrgSrvrDB_1")
+
+    def test_existing_db_folder_is_renamed_to_the_library_name(self):
+        self.pm.db = self.CLOUD
+        self.pm.add(["Client"], "P", stamp(self.now, hours=1))
+        b = self.backup()
+        b.cycle()  # name not known yet: old-style folder
+        old = self.tmp / "out" / "db_c31fb696ac7b4ad790cf73708407fb40"
+        self.assertTrue(old.is_dir())
+        self.write_resolve_log(("c31fb696-ac7b-4ad7-90cf-73708407fb40", "WashOrgSrvrDB_1"))
+        self.clock.advance(minutes=30)
+        self.assertEqual(b.cycle()["exported"], 0)  # nothing re-exported just because of the name
+        new = self.tmp / "out" / "WashOrgSrvrDB_1"
+        self.assertFalse(old.exists())
+        self.assertEqual(len(list(new.rglob("*.drp"))), 1)
+        last = b.load_state()["projects"]["db_c31fb696ac7b4ad790cf73708407fb40::Client/P"]["last_file"]
+        self.assertTrue(last.startswith(str(new)) and Path(last).exists(), last)
+        # the library is renamed in Blackmagic Cloud later: the folder follows
+        self.write_resolve_log(("c31fb696-ac7b-4ad7-90cf-73708407fb40", "Wash Main"))
+        self.clock.advance(minutes=30)
+        b.cycle()
+        self.assertEqual(sorted(p.name for p in (self.tmp / "out").iterdir()), ["Wash Main"])
+
+    def test_rename_never_merges_into_an_existing_folder(self):
+        self.pm.db = self.CLOUD
+        self.pm.add([], "P", stamp(self.now, hours=1))
+        b = self.backup()
+        b.cycle()
+        (self.tmp / "out" / "WashOrgSrvrDB_1").mkdir()
+        self.write_resolve_log(("c31fb696-ac7b-4ad7-90cf-73708407fb40", "WashOrgSrvrDB_1"))
+        self.clock.advance(minutes=30)
+        b.cycle()
+        self.assertTrue((self.tmp / "out" / "db_c31fb696ac7b4ad790cf73708407fb40").is_dir())  # left alone
+
+    def status_of(self, b):
+        return b.status.get("resolve")
 
     def test_unknown_database(self):
         self.assertEqual(self.backup(database={"name": "Nope"}).cycle()["status"], "database_not_found")

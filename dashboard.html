@@ -228,7 +228,7 @@ body.open #drawer { transform: none; visibility: visible; }
 
   <section class="lib" aria-labelledby="dbH" id="dbSection" hidden>
     <div class="lib-head"><h2 id="dbH">Libraries</h2></div>
-    <p class="hint" style="margin:0 0 10px;color:var(--dim)">Resolve only lets this app back up the library that's open. To back up another, open it in Resolve's Project Manager.</p>
+    <p class="hint" style="margin:0 0 10px;color:var(--dim)">Every library your Blackmagic Cloud account can see. Resolve only lets this app back up the library that's open, so open the others in Resolve's Project Manager now and then to back them up.</p>
     <div class="scroll"><table id="dbTbl">
       <thead><tr><th>Library</th><th class="r">Projects</th><th>Last checked</th><th>Status</th></tr></thead>
       <tbody id="dbRows"></tbody>
@@ -406,7 +406,8 @@ body.open #drawer { transform: none; visibility: visible; }
     if (s && s.resolve && s.resolve.connected) {
       const r = s.resolve;
       sub.append(h("span", {}, "DaVinci Resolve ", h("b", {}, r.version || "connected")));
-      if (r.database) sub.append(h("span", {}, "Database ", h("b", {}, r.database)));
+      if (r.library) sub.append(h("span", {}, "Library ", h("b", {}, r.library)));
+      else if (r.database) sub.append(h("span", {}, "Database ", h("b", {}, r.database)));
       sub.append(h("span", {}, r.open_project ? ["Open project ", h("b", {}, r.open_project)] : "No project open here"));
     } else if (s) sub.append(h("span", {}, "DaVinci Resolve isn't connected"));
     const running = s && s.state === "running";
@@ -559,17 +560,18 @@ body.open #drawer { transform: none; visibility: visible; }
   const STALE_DAYS = 7;
   const dbLabel = (d) => (d.DbType === "Cloud" || /\.rds\.amazonaws\.com$/.test(d.IpAddress || "")) ? "Blackmagic Cloud library"
     : d.DbType === "Disk" ? "Local database" : `${d.DbType || "Database"} on ${d.IpAddress || "this Mac"}`;
-  const dbFolders = (d) => { const f = d.folders || []; if (!f.length) return "No folders"; const more = f.length - 3; return f.slice(0, 3).join(", ") + (more > 0 ? ` and ${plural(more, "more folder")}` : ""); };
+  const dbFolders = (d) => { const f = d.folders || []; if (!f.length) return ""; const more = f.length - 3; return f.slice(0, 3).join(", ") + (more > 0 ? ` and ${plural(more, "more folder")}` : ""); };
   function renderLibraries() {
     const dbs = (S.lib && S.lib.databases) || [], body = $("dbRows");
     $("dbSection").hidden = !dbs.length; body.replaceChildren();
     const cur = S.status && S.status.resolve && S.status.resolve.connected ? S.status.resolve.database : null;
     for (const d of dbs.slice().sort((a, b) => (b.last_checked || "").localeCompare(a.last_checked || ""))) {
       const last = date(d.last_checked), days = last ? (Date.now() - last.getTime()) / 864e5 : Infinity;
-      const chip = d.DbName === cur ? ["current", "Open in Resolve"]
+      const chip = d.DbName === cur ? ["current", "Open in Resolve"] : !last ? ["stale", "Never backed up"]
         : days > STALE_DAYS ? ["stale", `Not opened for ${plural(Math.floor(days), "day")}`] : ["ok", "Backed up recently"];
+      const where = [dbLabel(d), d.folder && d.folder !== d.name ? `in folder ${d.folder}` : null, dbFolders(d)].filter(Boolean).join(" · ");
       body.append(h("tr", {},
-        h("td", {}, h("span", { class: "name" }, dbLabel(d)), h("small", { title: d.DbName || "" }, dbFolders(d))),
+        h("td", {}, h("span", { class: "name" }, d.name || d.DbName), h("small", { title: d.DbName || "" }, where)),
         h("td", { class: "r num" }, d.projects ?? ""),
         h("td", { title: last ? last.toLocaleString() : "" }, ago(last)),
         h("td", {}, h("span", { class: "chip " + chip[0] }, h("i"), chip[1]))));

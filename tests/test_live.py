@@ -28,6 +28,10 @@ class LiveBase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.cfg_path = self.tmp / "config.json"
+        self.logs = self.tmp / "resolve-logs"  # stands in for Resolve's own log folder
+        orig_dirs = rcb.resolve_log_dirs
+        rcb.resolve_log_dirs = lambda: [self.logs]
+        self.addCleanup(setattr, rcb, "resolve_log_dirs", orig_dirs)
         self.write_cfg()
         self.pm = FakePM()
         self.clock = Clock(dt.datetime(2026, 10, 13, 12, 0, 0))
@@ -288,8 +292,19 @@ class DashboardTests(LiveBase):
         self.assertEqual(len(lib["history"]), 1)
         self.assertEqual(lib["storage"]["files"], 1)
         [db] = lib["databases"]
-        self.assertEqual((db["DbName"], db["projects"], db["folders"]), ("Studio Cloud", 2, ["Client"]))
+        self.assertEqual((db["DbName"], db["name"], db["projects"], db["folders"]), ("Studio Cloud", "Studio Cloud", 2, ["Client"]))
         self.assertTrue(db["last_checked"])
+
+    def test_library_lists_cloud_libraries_never_opened(self):
+        self.logs.mkdir()
+        (self.logs / "ResolveDebug.txt").write_text(
+            "x | BlackmagicID: PL(9089d4db-5a9c-48cc-abe5-ed5ce2eb0899:'WashOrgSrvrDyson_1':D)\n")
+        self.advance(2000)
+        self.svc.tick()
+        _, lib = self.req("GET", "/api/library", self.AUTH)
+        by = {d["name"]: d for d in lib["databases"]}
+        self.assertIsNone(by["WashOrgSrvrDyson_1"]["last_checked"])
+        self.assertTrue(by["Studio Cloud"]["last_checked"])
 
     def test_failing_project_reported(self):
         self.pm.add([], "Bad", stamp(self.clock.t, minutes=1))
