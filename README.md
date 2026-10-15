@@ -118,7 +118,7 @@ Changes apply from the next cycle without restarting. Only the dashboard port ne
 
 | Key | Default | Meaning |
 |---|---|---|
-| `backup_dir` | `~/ResolveCloudBackups` | Where backups go. Avoid iCloud/Documents-protected folders on macOS. |
+| `backup_dir` | `~/ResolveCloudBackups` | Where backups go. Avoid iCloud/Documents-protected folders on macOS. On a Mac, **Choose…** in the dashboard's Settings opens the standard folder window. |
 | `interval_minutes` | `30` | Time between cycles. |
 | `active_hours` | `null` | e.g. `["07:00","22:00"]`. May wrap midnight. |
 | `database` | `{name: null, type: null}` | Database to back up; null = whichever is current in Resolve. |

@@ -58,7 +58,7 @@ import webbrowser
 from pathlib import Path
 
 APP = "resolve-cloud-backup"
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -552,6 +552,55 @@ def validate_settings(inc: dict) -> tuple[dict, dict]:
         if key not in EDITABLE:
             errs[key] = "This setting can only be changed in config.json."
     return clean, errs
+
+
+_CHOOSE_FOLDER_SCRIPT = """
+on run argv
+    activate
+    set msg to "Choose where Resolve Backup saves your backups"
+    if (count of argv) > 0 then
+        set f to choose folder with prompt msg default location (POSIX file (item 1 of argv))
+    else
+        set f to choose folder with prompt msg
+    end if
+    return POSIX path of f
+end run
+"""
+_choose_lock = threading.Lock()
+
+
+def can_choose_folder() -> bool:
+    return SYSTEM == "Darwin" and shutil.which("osascript") is not None
+
+
+def choose_folder(start: str | None = None, run=subprocess.run) -> dict:
+    """Show the macOS folder picker on this Mac. Returns {"path": ...}, {"cancelled": True} or {"error": ...}."""
+    if not can_choose_folder():
+        return {"error": "Choosing a folder this way only works on a Mac. Type the path instead."}
+    if not _choose_lock.acquire(blocking=False):
+        return {"error": "A folder window is already open. Look for it behind your other windows."}
+    try:
+        args = ["osascript", "-e", _CHOOSE_FOLDER_SCRIPT]
+        if start:
+            p = Path(os.path.expanduser(start))
+            while not p.is_dir() and p != p.parent:  # start at the nearest folder that exists
+                p = p.parent
+            if p.is_dir():
+                args.append(str(p))
+        try:
+            r = run(args, capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            return {"cancelled": True}
+        except OSError as e:
+            return {"error": f"Couldn't open the folder window: {e}"}
+        if r.returncode != 0:
+            if "-128" in (r.stderr or ""):  # the user pressed Cancel
+                return {"cancelled": True}
+            return {"error": f"Couldn't open the folder window: {(r.stderr or '').strip() or r.returncode}"}
+        path = (r.stdout or "").strip()
+        return {"path": path.rstrip("/") or "/"} if path else {"cancelled": True}
+    finally:
+        _choose_lock.release()
 
 
 def apply_settings(path: Path | None, clean: dict) -> None:
@@ -1272,6 +1321,7 @@ class DashboardServer:
     def settings_payload(self) -> dict:
         cfg = self.svc.cfg
         return {"settings": {k: cfg[k] for k in EDITABLE}, "config_path": str(self.svc.cfg_path),
+                "can_choose_folder": can_choose_folder(),
                 "dashboard_port": self.port}
 
 
@@ -1370,6 +1420,9 @@ def _make_handler(dash: DashboardServer):
                 svc = dash.svc
                 if path == "/api/run-now":
                     self._send(200, {"ok": svc.request_run_now(), "running": svc.status.get("state") == "running"})
+                elif path == "/api/choose-folder":
+                    start = body.get("start")
+                    self._send(200, choose_folder(start if isinstance(start, str) else None))
                 elif path == "/api/pause":
                     svc.set_paused(bool(body.get("paused", True)))
                     self._send(200, {"ok": True, "paused": svc.paused})

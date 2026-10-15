@@ -151,6 +151,7 @@ body.open #drawer { transform: none; visibility: visible; }
 .f .err { color: var(--bad); font-size: 12.5px; margin-top: 4px; }
 .f .row { display: flex; gap: 10px; align-items: center; }
 .f .row > * { flex: 1; min-width: 0; }
+.f .row > .btn { flex: none; }
 .f .row > span { flex: none; color: var(--dim); }
 .f .num-row > input[type=number] { flex: none; width: 7.5em; }
 .check { display: flex; gap: 8px; align-items: center; font-weight: 500; }
@@ -268,7 +269,7 @@ body.open #drawer { transform: none; visibility: visible; }
   <header><h2 id="setH">Settings</h2><button class="btn" id="closeSettings">Close</button></header>
   <form id="form" autocomplete="off">
     <div class="f"><label for="backup_dir">Backup folder</label>
-      <input type="text" id="backup_dir" spellcheck="false">
+      <div class="row"><input type="text" id="backup_dir" spellcheck="false"><button type="button" class="btn" id="chooseDir" hidden>Choose…</button></div>
       <div class="hint">Use a full path, for example /Volumes/Backup/Resolve. The folder is created if it doesn't exist.</div>
       <div class="err" data-err="backup_dir"></div></div>
     <div class="f"><label for="interval_minutes">Check for changes every</label>
@@ -650,12 +651,22 @@ body.open #drawer { transform: none; visibility: visible; }
     $("hours_on").checked = !!s.active_hours; $("hours_from").value = s.active_hours ? s.active_hours[0] : "07:00"; $("hours_to").value = s.active_hours ? s.active_hours[1] : "22:00";
     syncHours();
   }
+  $("chooseDir").addEventListener("click", async () => {
+    const b = $("chooseDir"), err = document.querySelector('[data-err="backup_dir"]');
+    b.disabled = true; b.textContent = "Choosing…"; err.textContent = "";
+    try {
+      const r = await api("/api/choose-folder", { start: $("backup_dir").value.trim() || null });
+      if (r.path) { $("backup_dir").value = r.path; dirty(); }
+      else if (r.error) err.textContent = r.error;
+    } catch (e) { err.textContent = "Couldn't open the folder window."; }
+    b.disabled = false; b.textContent = "Choose…";
+  });
   const syncHours = () => { $("hours_from").disabled = $("hours_to").disabled = !$("hours_on").checked; $("max_backups").disabled = !$("max_on").checked; };
   const dirty = () => { $("save").disabled = JSON.stringify(collect()) === initial; };
   async function openSettings() {
     opener = document.activeElement;
     try {
-      const d = await api("/api/settings"); fill(d.settings);
+      const d = await api("/api/settings"); fill(d.settings); $("chooseDir").hidden = !d.can_choose_folder;
       $("cfgPath").textContent = "More options, such as alerts and the dashboard port, are in " + d.config_path;
       initial = JSON.stringify(collect()); $("save").disabled = true; $("saveMsg").textContent = ""; $("saveMsg").className = "";
       for (const e of document.querySelectorAll("[data-err]")) e.textContent = "";

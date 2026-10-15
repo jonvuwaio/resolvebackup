@@ -2,11 +2,13 @@
 import datetime as dt
 import http.client
 import json
+import subprocess
 import os
 import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -166,6 +168,37 @@ class ServiceTests(LiveBase):
         snap = self.status.snapshot()
         self.assertEqual([e["msg"] for e in snap["events"]], ["hello feed"])
         self.assertEqual(self.status.snapshot(since=snap["event_seq"])["events"], [])
+
+
+class ChooseFolderTests(unittest.TestCase):
+    class Run:
+        def __init__(self, code=0, out="", err=""):
+            self.code, self.out, self.err, self.args = code, out, err, None
+
+        def __call__(self, args, **kw):
+            self.args = args
+            return subprocess.CompletedProcess(args, self.code, self.out, self.err)
+
+    def setUp(self):
+        p = mock.patch.object(rcb, "can_choose_folder", lambda: True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_returns_the_chosen_path(self):
+        run = self.Run(out="/Volumes/Backup/Resolve/\n")
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(rcb.choose_folder(str(Path(d) / "not" / "yet"), run=run), {"path": "/Volumes/Backup/Resolve"})
+            self.assertEqual(run.args[-1], str(Path(d)))  # starts in the nearest folder that exists
+        self.assertEqual(run.args[:2], ["osascript", "-e"])
+
+    def test_cancel_and_errors(self):
+        self.assertEqual(rcb.choose_folder(None, run=self.Run(1, err="execution error: User canceled. (-128)")),
+                         {"cancelled": True})
+        self.assertIn("error", rcb.choose_folder(None, run=self.Run(1, err="boom")))
+
+    def test_not_on_a_mac(self):
+        with mock.patch.object(rcb, "can_choose_folder", lambda: False):
+            self.assertIn("error", rcb.choose_folder("/x", run=self.Run(out="/y")))
 
 
 class SettingsValidation(unittest.TestCase):
@@ -329,6 +362,16 @@ class DashboardTests(LiveBase):
         self.assertTrue(r["ok"])
         self.svc.tick()
         self.assertEqual(self.pm.exports.count("Feature"), 2)
+
+    def test_choose_folder_endpoint(self):
+        seen = []
+        with mock.patch.object(rcb, "choose_folder", lambda start: seen.append(start) or {"path": "/Volumes/B"}):
+            code, r = self.req("POST", "/api/choose-folder", self.AUTH, {"start": "/Volumes"})
+            self.assertEqual((code, r, seen), (200, {"path": "/Volumes/B"}, ["/Volumes"]))
+            code, _ = self.req("POST", "/api/choose-folder", {}, {})
+            self.assertEqual(code, 401)  # needs the dashboard token like every other action
+        _, st = self.req("GET", "/api/settings", self.AUTH)
+        self.assertIn("can_choose_folder", st)
 
     def test_settings_roundtrip_and_validation(self):
         _, s = self.req("GET", "/api/settings", self.AUTH)
