@@ -273,12 +273,17 @@ body.open #drawer { transform: none; visibility: visible; }
       <div class="hint">Use a full path, for example /Volumes/Backup/Resolve. The folder is created if it doesn't exist.</div>
       <div class="err" data-err="backup_dir"></div></div>
     <div class="f"><label for="interval_minutes">Check for changes every</label>
-      <div class="row"><input type="number" id="interval_minutes" min="1" max="1440"><span>minutes</span></div>
+      <div class="row"><input type="number" id="interval_minutes" min="0" max="1440"><span>minutes</span></div>
+      <div class="hint">0 checks continuously, with a minute between checks.</div>
       <div class="err" data-err="interval_minutes"></div></div>
     <div class="f"><label class="check"><input type="checkbox" id="hours_on"> Only back up during set hours</label>
       <div class="row" style="margin-top:8px"><input type="time" id="hours_from" aria-label="From"><span>to</span><input type="time" id="hours_to" aria-label="To"></div>
-      <div class="hint">You can still use Back up now outside these hours.</div>
-      <div class="err" data-err="active_hours"></div></div>
+      <div class="row num-row" style="margin-top:8px"><span>Outside them, check every</span><input type="number" id="off_hours_interval_minutes" min="0" max="1440"><span>minutes</span></div>
+      <div class="hint">0 doesn't check outside these hours. You can still use Back up now.</div>
+      <div class="err" data-err="active_hours"></div><div class="err" data-err="off_hours_interval_minutes"></div></div>
+    <div class="f" id="bgRow"><label class="check"><input type="checkbox" id="background_resolve"> When Resolve is closed, open it hidden to back up</label>
+      <div class="hint">Resolve starts with no windows, backs up, then quits. If you open Resolve while it's running hidden, it's reopened normally for you after a few seconds.</div>
+      <div class="err" data-err="background_resolve"></div></div>
     <div class="f"><label for="load_to_export">If a project can't be exported directly</label>
       <select id="load_to_export">
         <option value="auto">Open it read-only, export it, then close it</option>
@@ -333,6 +338,7 @@ body.open #drawer { transform: none; visibility: visible; }
     project_open_cannot_switch: "A project is open, so the database couldn't be switched",
     switch_database_failed: "Couldn't switch database", switch_failed: "Couldn't switch database",
     no_project_manager: "Resolve's Project Manager wasn't available", error: "The check hit an error",
+    interrupted: "Stopped part way so you could use Resolve",
   };
   const HELP = {
     resolve_unavailable: "Open DaVinci Resolve Studio, sign in to Blackmagic Cloud, and set Preferences > System > General > External scripting using to Local.",
@@ -382,12 +388,13 @@ body.open #drawer { transform: none; visibility: visible; }
     if (S.denied) return { text: "Access token missing", color: "var(--bad)", key: "denied" };
     if (!s || S.offline) return { text: S.status ? "Service not reachable" : "Connecting", color: "var(--idle)", key: "offline" };
     const failed = (s.last_cycle && (s.last_cycle.failed || s.last_cycle.failing)) || 0;
-    const lastBad = s.last_cycle && s.last_cycle.status && !["ok", "resolve_unavailable"].includes(s.last_cycle.status);
+    const lastBad = s.last_cycle && s.last_cycle.status && !["ok", "resolve_unavailable", "interrupted"].includes(s.last_cycle.status);
     switch (s.state) {
       case "running": return { text: "Backing up now", color: "var(--run)", key: "run" };
       case "paused": return { text: "Paused", color: "var(--idle)", key: "paused" };
       case "waiting_for_resolve": return { text: "Waiting for Resolve", color: "var(--wait)", key: "wait" };
-      case "outside_active_hours": return { text: "Resting until " + ((s.config.active_hours || ["", ""])[0] || "morning"), color: "var(--idle)", key: "rest" };
+      case "outside_active_hours": if (s.next_run_at) return { text: "Out of hours", color: "var(--idle)", key: "rest" };
+        return { text: "Resting until " + ((s.config.active_hours || ["", ""])[0] || "morning"), color: "var(--idle)", key: "rest" };
       case "idle":
         if (failed || lastBad) return { text: "Needs attention", color: "var(--bad)", key: "bad" };
         return { text: "Up to date", color: "var(--ok)", key: "ok" };
@@ -406,7 +413,7 @@ body.open #drawer { transform: none; visibility: visible; }
     const sub = $("sub"); sub.replaceChildren();
     if (s && s.resolve && s.resolve.connected) {
       const r = s.resolve;
-      sub.append(h("span", {}, "DaVinci Resolve ", h("b", {}, r.version || "connected")));
+      sub.append(h("span", {}, r.hidden ? "Hidden DaVinci Resolve " : "DaVinci Resolve ", h("b", {}, r.version || "connected")));
       if (r.library) sub.append(h("span", {}, "Library ", h("b", {}, r.library)));
       else if (r.database) sub.append(h("span", {}, "Database ", h("b", {}, r.database)));
       sub.append(h("span", {}, r.open_project ? ["Open project ", h("b", {}, r.open_project)] : "No project open here"));
@@ -432,8 +439,8 @@ body.open #drawer { transform: none; visibility: visible; }
     if (!s) { main.textContent = "Connecting to the backup service"; sub.textContent = ""; fails.replaceChildren(); return; }
     const c = s.cycle, last = s.last_cycle;
     if (s.state === "running" && c) {
-      main.textContent = c.current || (c.phase === "connecting" ? "Connecting to Resolve" : "Reading the project library");
-      sub.textContent = (c.phase === "exporting" ? "Exporting" : c.phase === "connecting" ? "Connecting" : "Scanning the library") + ", running for " + mmss((Date.now() - date(c.started_at)) / 1000);
+      main.textContent = c.current || (c.phase === "starting_resolve" ? "Starting DaVinci Resolve hidden" : c.phase === "connecting" ? "Connecting to Resolve" : "Reading the project library");
+      sub.textContent = (c.phase === "exporting" ? "Exporting" : c.phase === "starting_resolve" ? "Starting" : c.phase === "connecting" ? "Connecting" : "Scanning the library") + ", running for " + mmss((Date.now() - date(c.started_at)) / 1000);
       track.hidden = counts.hidden = false;
       const f = $("fill");
       if (c.expected) { f.classList.remove("indet"); f.style.width = Math.min(100, Math.round(c.seen / c.expected * 100)) + "%"; }
@@ -448,8 +455,13 @@ body.open #drawer { transform: none; visibility: visible; }
       sub.textContent = s.next_run_at ? "Trying again in " + mmss((date(s.next_run_at) - Date.now()) / 1000) : "";
     } else if (s.state === "outside_active_hours") {
       const ah = s.config.active_hours || [];
-      main.textContent = `Resting until ${ah[0] || "tomorrow"}`;
-      sub.textContent = ah.length ? `Backups run between ${ah[0]} and ${ah[1]}. Back up now still works.` : "";
+      if (s.next_run_at) {
+        main.textContent = "Next check in " + mmss((date(s.next_run_at) - Date.now()) / 1000);
+        sub.textContent = `Out of hours, so checking less often until ${ah[0] || "morning"}.`;
+      } else {
+        main.textContent = `Resting until ${ah[0] || "tomorrow"}`;
+        sub.textContent = ah.length ? `Backups run between ${ah[0]} and ${ah[1]}. Back up now still works.` : "";
+      }
     } else {
       main.textContent = s.next_run_at ? "Next check in " + mmss((date(s.next_run_at) - Date.now()) / 1000) : "Starting";
       sub.textContent = last ? lastSummary(last) : "The first check runs as soon as Resolve is reachable.";
@@ -583,7 +595,7 @@ body.open #drawer { transform: none; visibility: visible; }
     const st = S.lib.storage, s = S.status;
     f.append(h("span", {}, `${plural(st.files, "backup")} using ${bytes(st.bytes)}`), h("span", {}, "In ", h("b", { style: "font-weight:500;color:var(--text)" }, st.dir)));
     if (st.free_bytes != null) f.append(h("span", {}, `${bytes(st.free_bytes)} free on that disk`));
-    if (s && s.config) f.append(h("span", {}, `Checks every ${plural(s.config.interval_minutes, "minute")}`));
+    if (s && s.config) f.append(h("span", {}, s.config.interval_minutes ? `Checks every ${plural(s.config.interval_minutes, "minute")}` : "Checks continuously"));
   }
 
   // ---------- polling ----------
@@ -629,13 +641,14 @@ body.open #drawer { transform: none; visibility: visible; }
   });
 
   // ---------- settings drawer ----------
-  const FIELDS = ["backup_dir", "interval_minutes", "load_to_export", "initial_lookback_days", "keep_all_hours", "keep_daily_days", "db_name", "hours_on", "hours_from", "hours_to", "include", "exclude", "max_on", "max_backups"];
+  const FIELDS = ["backup_dir", "interval_minutes", "off_hours_interval_minutes", "background_resolve", "load_to_export", "initial_lookback_days", "keep_all_hours", "keep_daily_days", "db_name", "hours_on", "hours_from", "hours_to", "include", "exclude", "max_on", "max_backups"];
   let initial = "", opener = null;
   const lines = (id) => $(id).value.split("\n").map((x) => x.trim()).filter(Boolean);
   function collect() {
     return {
       backup_dir: $("backup_dir").value.trim(), interval_minutes: Number($("interval_minutes").value),
       active_hours: $("hours_on").checked ? [$("hours_from").value, $("hours_to").value] : null,
+      off_hours_interval_minutes: Number($("off_hours_interval_minutes").value), background_resolve: $("background_resolve").checked,
       load_to_export: $("load_to_export").value, include: lines("include"), exclude: lines("exclude"),
       initial_lookback_days: Number($("initial_lookback_days").value),
       retention: { keep_all_hours: Number($("keep_all_hours").value), keep_daily_days: Number($("keep_daily_days").value),
@@ -648,6 +661,7 @@ body.open #drawer { transform: none; visibility: visible; }
     $("initial_lookback_days").value = s.initial_lookback_days; $("keep_all_hours").value = s.retention.keep_all_hours; $("keep_daily_days").value = s.retention.keep_daily_days;
     $("max_on").checked = s.retention.max_backups > 0; $("max_backups").value = s.retention.max_backups || 10;
     $("db_name").value = (s.database && s.database.name) || ""; $("include").value = s.include.join("\n"); $("exclude").value = s.exclude.join("\n");
+    $("off_hours_interval_minutes").value = s.off_hours_interval_minutes; $("background_resolve").checked = !!s.background_resolve;
     $("hours_on").checked = !!s.active_hours; $("hours_from").value = s.active_hours ? s.active_hours[0] : "07:00"; $("hours_to").value = s.active_hours ? s.active_hours[1] : "22:00";
     syncHours();
   }
@@ -661,12 +675,12 @@ body.open #drawer { transform: none; visibility: visible; }
     } catch (e) { err.textContent = "Couldn't open the folder window."; }
     b.disabled = false; b.textContent = "Choose…";
   });
-  const syncHours = () => { $("hours_from").disabled = $("hours_to").disabled = !$("hours_on").checked; $("max_backups").disabled = !$("max_on").checked; };
+  const syncHours = () => { $("hours_from").disabled = $("hours_to").disabled = $("off_hours_interval_minutes").disabled = !$("hours_on").checked; $("max_backups").disabled = !$("max_on").checked; };
   const dirty = () => { $("save").disabled = JSON.stringify(collect()) === initial; };
   async function openSettings() {
     opener = document.activeElement;
     try {
-      const d = await api("/api/settings"); fill(d.settings); $("chooseDir").hidden = !d.can_choose_folder;
+      const d = await api("/api/settings"); fill(d.settings); $("chooseDir").hidden = !d.can_choose_folder; $("bgRow").hidden = !d.can_run_hidden;
       $("cfgPath").textContent = "More options, such as alerts and the dashboard port, are in " + d.config_path;
       initial = JSON.stringify(collect()); $("save").disabled = true; $("saveMsg").textContent = ""; $("saveMsg").className = "";
       for (const e of document.querySelectorAll("[data-err]")) e.textContent = "";

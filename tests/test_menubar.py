@@ -48,8 +48,17 @@ class SummarizeTests(unittest.TestCase):
         w = mb.summarize(status("waiting_for_resolve"))
         self.assertEqual(w["colour"], "wait")
         self.assertIn("16:08", w["detail"])
-        r = mb.summarize(status("outside_active_hours", config={"active_hours": ["07:00", "22:00"]}))
+        r = mb.summarize(status("outside_active_hours", config={"active_hours": ["07:00", "22:00"]},
+                                next_run_at=None))
         self.assertEqual(r["title"], "Resting until 07:00")
+        o = mb.summarize(status("outside_active_hours", config={"active_hours": ["07:00", "22:00"]}))
+        self.assertEqual((o["title"], o["detail"]), ("Out of hours", "Checking less often. Next at 16:08"))
+
+    def test_handing_resolve_over_is_not_a_problem(self):
+        last = {"at": "2026-10-13T15:37:34", "status": "interrupted", "exported": 1, "failed": 0, "failing": 0}
+        self.assertEqual(mb.summarize(status(last_cycle=last))["key"], "ok")
+        cyc = {"phase": "starting_resolve", "current": None}
+        self.assertEqual(mb.summarize(status("running", cycle=cyc))["detail"], "Starting DaVinci Resolve hidden")
 
     def test_failures_are_shown(self):
         last = {"at": "2026-10-13T15:37:34", "status": "ok", "exported": 7, "failed": 1, "failing": 1}

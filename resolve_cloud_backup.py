@@ -58,19 +58,24 @@ import webbrowser
 from pathlib import Path
 
 APP = "resolve-cloud-backup"
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
 DEFAULTS = {
     # Where .drp backups are written.
     "backup_dir": "~/ResolveCloudBackups",
-    # Minutes between backup cycles.
+    # Minutes between backup cycles. 0 = continuously (a minute's gap between cycles).
     "interval_minutes": 30,
     # Minutes to wait before retrying when Resolve isn't running / reachable.
     "retry_minutes": 5,
     # Optional ["HH:MM", "HH:MM"] window; cycles only run inside it (may wrap midnight).
     "active_hours": None,
+    # Outside active_hours, check this often instead. 0 = not at all.
+    "off_hours_interval_minutes": 0,
+    # macOS: while DaVinci Resolve isn't open, start it hidden (-nogui) for each cycle and quit it afterwards,
+    # so nothing appears on screen. Open Resolve while it runs hidden and it is quit and opened normally.
+    "background_resolve": True,
     # Which Resolve database to back up. name=None means "whichever is current".
     # type is optional ("Cloud", "PostgreSQL", "Disk" ...) - run `list` to see what
     # Resolve reports for yours.
@@ -119,6 +124,8 @@ DEFAULTS = {
     # Override auto-detected Resolve scripting locations if you installed elsewhere.
     "resolve_script_api": None,
     "resolve_script_lib": None,
+    # Resolve's executable, for background_resolve. null = the standard install in /Applications.
+    "resolve_app": None,
 }
 
 RESERVED_WIN = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
@@ -402,6 +409,172 @@ def goto_path(pm, path: list[str]) -> None:
             break
 
 
+# ------------------------------------------------------------- hidden Resolve
+RESOLVE_EXE = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/MacOS/Resolve"
+_RESOLVE_PROC_RE = re.compile(r"DaVinci Resolve\.app/Contents/MacOS/Resolve(?: |$)")
+
+
+class CycleInterrupted(Exception):
+    """Raised inside a cycle to stop it early (service stopping, or Resolve wanted by the user)."""
+
+
+def resolve_processes(run=subprocess.run) -> list[tuple[int, str]]:
+    """(pid, command line) of every running DaVinci Resolve, leaving out its crash-report helper."""
+    try:
+        out = run(["ps", "-axo", "pid=,args="], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    procs = []
+    for line in out.splitlines():
+        pid, _, args = line.strip().partition(" ")
+        if pid.isdigit() and _RESOLVE_PROC_RE.search(args) and " -reportCrash" not in args:
+            procs.append((int(pid), args.strip()))
+    return procs
+
+
+def front_app_pid(run=subprocess.run) -> int | None:
+    """pid of the app in front on macOS (the one the user last clicked or opened)."""
+    try:
+        out = run(["lsappinfo", "info", "-only", "pid", "front"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r'"pid"=(\d+)', out or "")
+    return int(m.group(1)) if m else None
+
+
+class HiddenResolve:
+    """DaVinci Resolve started with -nogui for one backup cycle, so nothing flicks up on screen (macOS).
+
+    Resolve runs one copy at a time, so this is only used while the user doesn't have Resolve open. Opening
+    Resolve from the Dock or Finder while the hidden copy runs just brings the hidden copy to the front, with
+    no window. ``wanted()`` notices that, so the cycle can stop, quit the hidden copy and open Resolve properly.
+    """
+
+    START_TIMEOUT = 300  # seconds for Resolve to start and answer scripting calls
+    QUIT_TIMEOUT = 90
+
+    def __init__(self, cfg: dict, connect=None, popen=subprocess.Popen, run=subprocess.run,
+                 sleep=time.sleep, clock=time.monotonic, kill=os.kill):
+        self.cfg = cfg
+        self.exe = cfg.get("resolve_app") or RESOLVE_EXE
+        self.connect_fn = connect or connect_resolve
+        self.popen, self.run, self.sleep, self.clock, self.kill = popen, run, sleep, clock, kill
+        self.proc = None
+        self.pid: int | None = None
+        self.resolve = None
+        self.handed_over = False
+        self._last_look = None
+
+    @staticmethod
+    def available(cfg: dict) -> bool:
+        return SYSTEM == "Darwin" and bool(cfg.get("background_resolve"))
+
+    # ---- lifecycle
+    def launch(self) -> bool:
+        try:
+            self.proc = self.popen([self.exe, "-nogui"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as e:
+            log.error("Could not start DaVinci Resolve hidden (%s): %s", self.exe, e)
+            return False
+        self.pid = self.proc.pid
+        log.info("Started DaVinci Resolve hidden for this backup (pid %s)", self.pid)
+        return True
+
+    def adopt(self, pid: int) -> None:
+        """Take charge of a hidden Resolve left running earlier (for example if this app was force-quit)."""
+        self.pid = pid
+        log.info("Using the hidden DaVinci Resolve that is already running (pid %s)", pid)
+
+    def alive(self) -> bool:
+        if self.proc is not None:
+            return self.proc.poll() is None
+        if self.pid is None:
+            return False
+        try:
+            self.kill(self.pid, 0)
+            return True
+        except OSError:
+            return False
+
+    def connect(self, cfg: dict, stopping=lambda: False):
+        """Wait for the hidden Resolve to answer scripting calls with a library open. None if it never does."""
+        start = self.clock()
+        while self.clock() - start < self.START_TIMEOUT and not stopping():
+            if not self.alive():
+                log.error("Hidden DaVinci Resolve exited while starting up")
+                return None
+            r = self.connect_fn(cfg)
+            pm = r.GetProjectManager() if r else None
+            if pm and pm.GetCurrentDatabase():
+                self.resolve = r
+                log.info("Hidden DaVinci Resolve ready after %.0f s", self.clock() - start)
+                return r
+            self.sleep(3)
+        if not stopping():
+            log.error("Hidden DaVinci Resolve didn't answer within %d s", self.START_TIMEOUT)
+        return None
+
+    def wanted(self) -> bool:
+        """True once the user has brought the hidden Resolve to the front (they want to use Resolve)."""
+        if self.handed_over:
+            return True
+        now = self.clock()
+        if self._last_look is not None and now - self._last_look < 1:
+            return False
+        self._last_look = now
+        if self.pid is not None and front_app_pid(self.run) == self.pid:
+            log.info("DaVinci Resolve was opened while running hidden; handing it over")
+            self.handed_over = True
+        return self.handed_over
+
+    def quit(self) -> None:
+        """Quit the hidden Resolve; if the user asked for Resolve meanwhile, open it normally for them."""
+        if self.resolve is None and self.alive():
+            # Still starting up. Killing it now makes Resolve show its crash reporter, so give it a minute
+            # to answer scripting calls and ask it to quit properly.
+            end = self.clock() + 60
+            while self.resolve is None and self.alive() and self.clock() < end:
+                self.resolve = self.connect_fn(self.cfg)
+                if self.resolve is None:
+                    self.sleep(3)
+        if self.resolve is not None:
+            try:
+                self.resolve.Quit()
+            except Exception as e:  # noqa: BLE001
+                log.debug("Resolve.Quit() raised: %s", e)
+        if not self._wait_exit(self.QUIT_TIMEOUT):
+            log.warning("Hidden DaVinci Resolve didn't quit; stopping it")
+            self._signal(signal.SIGTERM)
+            if not self._wait_exit(20):
+                self._signal(signal.SIGKILL)
+                self._wait_exit(10)
+        log.info("Quit hidden DaVinci Resolve")
+        if self.handed_over:
+            app = self.exe.split("/Contents/MacOS/")[0]
+            try:
+                self.run(["open", "-a", app], timeout=30, check=False)
+                log.info("Opened DaVinci Resolve for you")
+            except (OSError, subprocess.SubprocessError) as e:
+                log.warning("Could not open DaVinci Resolve: %s", e)
+
+    def _signal(self, sig) -> None:
+        if self.pid is None:
+            return
+        try:
+            self.kill(self.pid, sig)
+        except OSError:
+            pass
+
+    def _wait_exit(self, seconds: float) -> bool:
+        end = self.clock() + seconds
+        while self.alive():
+            if self.clock() >= end:
+                return False
+            self.sleep(0.5)
+        return True
+
+
 # ------------------------------------------------------------------ live status
 class LiveStatus:
     """Thread-safe picture of what the service is doing right now.
@@ -458,7 +631,8 @@ class EventHandler(logging.Handler):
 
 
 # ------------------------------------------------------- settings from the UI
-EDITABLE = ("backup_dir", "interval_minutes", "retry_minutes", "active_hours", "initial_lookback_days",
+EDITABLE = ("backup_dir", "interval_minutes", "retry_minutes", "active_hours", "off_hours_interval_minutes",
+            "background_resolve", "initial_lookback_days",
             "include", "exclude", "load_to_export", "save_open_project", "switch_database", "database",
             "with_stills_and_luts", "max_exports_per_cycle", "min_free_gb", "retention")
 
@@ -477,12 +651,13 @@ def validate_settings(inc: dict) -> tuple[dict, dict]:
         else:
             dest[key] = int(v)
 
-    for key, lo, hi in (("interval_minutes", 1, 1440), ("retry_minutes", 1, 240),
+    for key, lo, hi in (("interval_minutes", 0, 1440), ("off_hours_interval_minutes", 0, 1440),
+                        ("retry_minutes", 1, 240),
                         ("initial_lookback_days", 1, 3650), ("max_exports_per_cycle", 1, 1000),
                         ("min_free_gb", 0, 100000)):
         if key in inc:
             whole(key, lo, hi)
-    for key in ("save_open_project", "switch_database", "with_stills_and_luts"):
+    for key in ("save_open_project", "switch_database", "with_stills_and_luts", "background_resolve"):
         if key in inc:
             if isinstance(inc[key], bool):
                 clean[key] = inc[key]
@@ -666,7 +841,9 @@ class Backup:
         os.replace(tmp, self.state_file)
 
     # ---- one cycle
-    def cycle(self) -> dict:
+    def cycle(self, connect=None, interrupted=None, hidden: bool = False) -> dict:
+        """One pass over the open library. ``connect`` overrides how Resolve is reached (the hidden copy);
+        ``interrupted()`` returning True stops the pass early, between projects."""
         stats = {"status": "ok", "seen": 0, "exported": 0, "unchanged": 0, "skipped_old": 0,
                  "filtered": 0, "deferred": 0, "failed": 0, "backoff": 0, "files": []}
         now = self.clock()
@@ -686,7 +863,9 @@ class Backup:
 
         state = self.load_state()
         self._begin(now, state)
-        resolve = self.connect(self.cfg)
+        if hidden:
+            self.status.update_cycle(phase="starting_resolve")
+        resolve = (connect or self.connect)(self.cfg)
         if not resolve:
             log.warning("DaVinci Resolve not reachable (is it running, with external scripting set to Local?)")
             stats["status"] = "resolve_unavailable"
@@ -704,7 +883,8 @@ class Backup:
             version = resolve.GetVersionString()
         except Exception:  # noqa: BLE001
             version = None
-        self.status.set(resolve={"connected": True, "version": version, "database": orig_db.get("DbName"),
+        self.status.set(resolve={"connected": True, "hidden": hidden, "version": version,
+                                 "database": orig_db.get("DbName"),
                                  "library": self.known_library_names(state).get(orig_db.get("DbName")),
                                  "database_type": orig_db.get("DbType"), "open_project": open_name})
         self.status.update_cycle(phase="scanning")
@@ -740,12 +920,16 @@ class Backup:
         orig_path = [] if switched else current_folder_path(pm)
         ctx = {"pm": pm, "state": state, "stats": stats, "now": now, "db": target.get("DbName") or "default",
                "folder": self._library_folder(target, state),
-               "open_name": open_name, "can_load": open_name is None, "exports": 0, "touched": set()}
+               "open_name": open_name, "can_load": open_name is None, "exports": 0, "touched": set(),
+               "interrupted": interrupted or (lambda: False)}
         try:
             if open_name and self.cfg["save_open_project"]:
                 pm.SaveProject()
             pm.GotoRootFolder()
             self._walk(pm, [], 0, ctx)
+        except CycleInterrupted:
+            stats["status"] = "interrupted"
+            log.info("Stopped this check part way through; it carries on next time")
         finally:
             try:
                 if switched:
@@ -755,7 +939,8 @@ class Backup:
             except Exception as e:  # noqa: BLE001
                 log.warning("Could not restore Resolve's previous location: %s", e)
             self._retention(ctx["touched"], now, state)
-        self._remember_database(target, ctx, state)
+        if stats["status"] == "ok":
+            self._remember_database(target, ctx, state)
         return self._finish(stats, state)
 
     # ---- library names and folders
@@ -843,11 +1028,15 @@ class Backup:
         names = list(pm.GetProjectListInCurrentFolder() or [])
         names += [n for n in attrs if n not in names]
         for name in names:
+            if ctx["interrupted"]():
+                raise CycleInterrupted
             self._handle(pm, path, name, attrs.get(name) or {}, ctx)
         folders = list(pm.GetFolderListInCurrentFolder() or [])
         if depth == 0:
             ctx["top_folders"] = folders[:50]
         for folder in folders:
+            if ctx["interrupted"]():
+                raise CycleInterrupted
             if not pm.OpenFolder(folder):
                 log.warning("Could not open folder %r", folder)
                 continue
@@ -1069,7 +1258,8 @@ class Service:
     """Scheduling loop. ``tick()`` decides what to do now and returns how long to sleep."""
 
     def __init__(self, cfg_path: Path | None = None, status: LiveStatus | None = None, connect=None,
-                 clock=None, wall=time.time, state_dir: Path | None = None):
+                 clock=None, wall=time.time, state_dir: Path | None = None, hidden_factory=None,
+                 processes=resolve_processes):
         self.cfg_path = Path(cfg_path) if cfg_path else default_config_path()
         self.dir = Path(state_dir) if state_dir else app_dir()
         self.cfg = load_config(self.cfg_path)
@@ -1082,6 +1272,8 @@ class Service:
         self._run_now = False
         self.paused = False
         self.next_run = wall()  # first cycle straight away
+        self.hidden_factory = hidden_factory or (lambda cfg: HiddenResolve(cfg, connect=connect))
+        self.processes = processes
         self.backup = Backup(self.cfg, self.dir / "state.json", connect=connect, clock=clock,
                              status=self.status, sleep=lambda s: self._stop.wait(s))
         self.status.set(paused=False, state="starting")
@@ -1133,8 +1325,47 @@ class Service:
             return
         self.cfg = cfg
         self.backup.cfg = cfg
-        self.next_run = min(self.next_run, self.wall() + cfg["interval_minutes"] * 60)
+        self.next_run = min(self.next_run, self.wall() + max(cfg["interval_minutes"] * 60, 60))
         log.info("Settings reloaded")
+
+    # ---- schedule
+    def _wait_after_cycle(self) -> float:
+        """Seconds until the next cycle: interval_minutes in active hours (0 = continuously, a minute apart),
+        off_hours_interval_minutes outside them, but never past the start of the next active hours."""
+        now = self.backup.clock()
+        window = self.cfg["active_hours"]
+        if in_active_hours(window, now):
+            return max(self.cfg["interval_minutes"] * 60, 60)
+        off = self.cfg.get("off_hours_interval_minutes") or 0
+        until_open = self._until_window(window, now)
+        return max(min(off * 60, until_open) if off else until_open, 60)
+
+    @staticmethod
+    def _until_window(window, now: dt.datetime) -> float:
+        try:
+            a = dt.datetime.strptime(window[0], "%H:%M").time()
+        except (ValueError, IndexError, TypeError):
+            return 60.0
+        start = dt.datetime.combine(now.date(), a)
+        if start <= now:
+            start += dt.timedelta(days=1)
+        return (start - now).total_seconds()
+
+    # ---- hidden Resolve
+    def _hidden_session(self):
+        """A HiddenResolve to run this cycle in, or None to use the Resolve that's open (or report it missing)."""
+        if not HiddenResolve.available(self.cfg):
+            return None
+        procs = self.processes()
+        if not procs:
+            h = self.hidden_factory(self.cfg)
+            return h if h.launch() else None
+        hidden = [pid for pid, args in procs if " -nogui" in args]
+        if len(hidden) == len(procs):
+            h = self.hidden_factory(self.cfg)
+            h.adopt(hidden[0])
+            return h
+        return None
 
     # ---- the loop body
     def _run_cycle(self) -> None:
@@ -1143,17 +1374,30 @@ class Service:
             log.info("Another backup cycle is running; will check again shortly")
             self.next_run = self.wall() + 60
             return
+        hidden = None
         try:
-            status = self.backup.cycle()["status"]
+            hidden = self._hidden_session()
+            if hidden:
+                status = self.backup.cycle(
+                    connect=lambda cfg: hidden.connect(cfg, lambda: self.stopping),
+                    interrupted=lambda: self.stopping or hidden.wanted(), hidden=True)["status"]
+            else:
+                status = self.backup.cycle(interrupted=lambda: self.stopping)["status"]
         except Exception:  # noqa: BLE001
             log.exception("Unexpected error in backup cycle")
             status = "error"
             self.status.set(cycle=None)
         finally:
+            try:
+                if hidden:
+                    hidden.quit()
+                    self.status.set(resolve={"connected": False})
+            except Exception:  # noqa: BLE001
+                log.exception("Could not quit the hidden DaVinci Resolve")
             lock.release()
         retry = status in ("resolve_unavailable", "error", "no_project_manager", "backup_dir_unavailable")
-        minutes = self.cfg["retry_minutes"] if retry else self.cfg["interval_minutes"]
-        self.next_run = self.wall() + minutes * 60 * random.uniform(0.95, 1.05)
+        wait = self.cfg["retry_minutes"] * 60 if retry else self._wait_after_cycle()
+        self.next_run = self.wall() + wait * random.uniform(0.95, 1.05)
 
     def tick(self) -> float:
         self.reload_config()
@@ -1163,16 +1407,17 @@ class Service:
             self.status.set(state="paused", next_run_at=None)
             return 1.0
         in_window = in_active_hours(self.cfg["active_hours"], self.backup.clock())
+        off_hours = bool(self.cfg.get("off_hours_interval_minutes"))
         now = self.wall()
         if forced or now >= self.next_run:
-            if forced or in_window:
+            if forced or in_window or off_hours:
                 self._run_cycle()
                 now = self.wall()
             else:
                 self.next_run = now + 60  # look again in a minute
         last = self.status.get("last_cycle") or {}
         if not in_window:
-            state, nxt = "outside_active_hours", None
+            state, nxt = "outside_active_hours", (_iso(self.next_run) if off_hours else None)
         else:
             state = "waiting_for_resolve" if last.get("status") == "resolve_unavailable" else "idle"
             nxt = _iso(self.next_run)
@@ -1260,7 +1505,8 @@ class DashboardServer:
         cfg = self.svc.cfg
         d["service"] = {"pid": os.getpid(), "version": VERSION, "now": dt.datetime.now().isoformat(timespec="seconds"),
                         "started_at": self.started.isoformat(timespec="seconds")}
-        d["config"] = {k: cfg[k] for k in ("interval_minutes", "active_hours", "backup_dir", "load_to_export")}
+        d["config"] = {k: cfg[k] for k in ("interval_minutes", "off_hours_interval_minutes", "active_hours",
+                                           "backup_dir", "load_to_export", "background_resolve")}
         return d
 
     def _storage(self) -> dict:
@@ -1321,7 +1567,7 @@ class DashboardServer:
     def settings_payload(self) -> dict:
         cfg = self.svc.cfg
         return {"settings": {k: cfg[k] for k in EDITABLE}, "config_path": str(self.svc.cfg_path),
-                "can_choose_folder": can_choose_folder(),
+                "can_choose_folder": can_choose_folder(), "can_run_hidden": SYSTEM == "Darwin",
                 "dashboard_port": self.port}
 
 
@@ -1477,7 +1723,8 @@ class ServiceRunner:
             except OSError as e:
                 log.error("Dashboard could not start: %s", e)
                 self.dash = None
-        log.info("Service started: every %s min -> %s", cfg["interval_minutes"], cfg["backup_dir"])
+        log.info("Service started: %s -> %s", f"every {cfg['interval_minutes']} min" if cfg["interval_minutes"]
+                 else "continuously", cfg["backup_dir"])
         self.thread = threading.Thread(target=self._loop, name="backup-service", daemon=True)
         self.thread.start()
         return True
@@ -1501,7 +1748,7 @@ class ServiceRunner:
         if self.svc:
             self.svc.stop()
         if self.thread and self.thread is not threading.current_thread():
-            self.thread.join(15)
+            self.thread.join(30)  # long enough to quit a hidden Resolve
         if self.dash:
             self.dash.stop()
             self.dash = None

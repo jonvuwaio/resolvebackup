@@ -8,7 +8,9 @@ The service and dashboard are pure Python standard library. The optional macOS m
 ## How it works
 
 Cloud project libraries can only be read through Resolve itself, so the service talks to a **running
-DaVinci Resolve** over its scripting API:
+DaVinci Resolve** over its scripting API. On a Mac, while you don't have Resolve open, the service starts it
+**hidden** (`Resolve -nogui`, no windows) for each check and quits it afterwards (see "Hidden Resolve" below).
+A check then does this:
 
 1. Walk every folder of the chosen database.
 2. Read each project's `lastModifiedDate` (`GetProjectAttributesInCurrentFolder`).
@@ -119,8 +121,11 @@ Changes apply from the next cycle without restarting. Only the dashboard port ne
 | Key | Default | Meaning |
 |---|---|---|
 | `backup_dir` | `~/ResolveCloudBackups` | Where backups go. Avoid iCloud/Documents-protected folders on macOS. On a Mac, **Choose…** in the dashboard's Settings opens the standard folder window. |
-| `interval_minutes` | `30` | Time between cycles. |
+| `interval_minutes` | `30` | Time between cycles. `0` = continuously, a minute apart. |
 | `active_hours` | `null` | e.g. `["07:00","22:00"]`. May wrap midnight. |
+| `off_hours_interval_minutes` | `0` | Outside `active_hours`, check this often instead. `0` = not at all. The first check of the day still runs when `active_hours` starts. |
+| `background_resolve` | `true` | macOS: while Resolve isn't open, start it hidden for each check, then quit it. See "Hidden Resolve". |
+| `resolve_app` | `null` | Path to Resolve's executable for `background_resolve`; null = `/Applications/DaVinci Resolve/…/MacOS/Resolve`. |
 | `database` | `{name: null, type: null}` | Database to back up; null = whichever is current in Resolve. |
 | `switch_database` | `false` | Allow switching to `database` if it isn't current. Only ever done when no project is open. |
 | `initial_lookback_days` | `7` | First run only: skip projects untouched for longer. |
@@ -168,6 +173,23 @@ python3 resolve_cloud_backup.py probe "Folder/Project Name" --try-load   # + loa
 It prints whether the project is in collaboration mode, which route worked, and what to set. It writes only to a
 temp folder and leaves nothing behind.
 
+## Hidden Resolve (macOS)
+
+Driving the Resolve you have open makes its Project Manager flick from folder to folder during every check.
+A hidden Resolve avoids that, and is far faster: on a real 829-project cloud library a full check took
+about 80 seconds hidden against about 17 minutes through an open Resolve.
+
+- **When you don't have Resolve open,** each check starts `Resolve -nogui`, waits for it to answer (about
+  15 seconds), backs up whichever library Resolve last had open, and quits it. You may see Resolve's Dock icon
+  while it runs, but no windows.
+- **Resolve runs one copy at a time.** Opening Resolve from the Dock or Finder while the hidden copy runs only
+  brings the hidden copy forward, with no window. The service notices, stops the check between projects, quits the
+  hidden copy and opens Resolve normally for you, so it takes a few seconds longer to appear than usual.
+  The interrupted check carries on next time.
+- **When you have Resolve open,** checks go through your Resolve as before.
+- A hidden Resolve left running (for example if the app was force-quit) is used by the next check and then quit.
+- Turn it off with `"background_resolve": false` (or the Settings checkbox).
+
 ## Restoring locally
 
 If the cloud is unreachable: in Resolve switch to a local (Disk or PostgreSQL) database, right-click in the Project
@@ -177,8 +199,9 @@ Manager → *Import Project*, and pick the newest `.drp` from the project's back
 
 - **It never disturbs open work.** It only loads a project (the fallback described above) when you have *no*
   project open, and it restores the folder you were looking at in the Project Manager.
-- **Resolve must be running.** If it isn't, the service retries every 5 minutes. For an always-on setup, run
-  Resolve on a spare workstation (`-nogui` works with scripting) rather than your editing machine.
+- **Resolve must be running** (or, on a Mac, startable hidden). If it can't be reached, the service retries every
+  5 minutes. For an always-on setup, run Resolve on a spare workstation (`-nogui` works with scripting) rather than
+  your editing machine.
 - **`.drp` files contain the project (timelines, grades, media pool), not the media.**
 - **Complement, not replacement,** for Blackmagic Cloud's own project history and your media backups.
 - **Self-hosted PostgreSQL project server instead of Blackmagic Cloud?** This still works (it appears as a
@@ -190,9 +213,9 @@ Manager → *Import Project*, and pick the newest `.drp` from the project's back
 python3 -m unittest discover -s tests -v
 ```
 
-The 88 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
+The 118 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
 collaboration scenarios, backoff and alerts, `probe`, database switching, retention, caps, filters) plus the
-scheduler, the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, and the installer.
+scheduler, the hidden-Resolve hand-over (with faked processes), the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, and the installer.
 
 ## Not verified against real Resolve or macOS
 

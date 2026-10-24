@@ -11,6 +11,9 @@ sys.path.insert(0, str(ROOT))
 import menubar as mb  # noqa: E402
 import resolve_cloud_backup as rcb  # noqa: E402
 
+# Never start or quit a real DaVinci Resolve from the tests; tests that need it pass fakes.
+rcb.HiddenResolve.available = staticmethod(lambda cfg: False)
+
 
 class RunnerTests(unittest.TestCase):
     def setUp(self):

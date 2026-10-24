@@ -56,6 +56,7 @@ STATUS_TEXT = {
     "switch_failed": "Couldn't switch database",
     "no_project_manager": "Resolve's Project Manager wasn't available",
     "error": "The check hit an error",
+    "interrupted": "Stopped part way so you could use Resolve",
 }
 
 
@@ -101,13 +102,15 @@ def summarize(status: dict | None, offline: bool = False, denied: bool = False) 
 
     failed = int(last.get("failed") or last.get("failing") or 0)
     last_status = last.get("status")
-    last_bad = bool(last_status) and last_status not in ("ok", "resolve_unavailable")
+    last_bad = bool(last_status) and last_status not in ("ok", "resolve_unavailable", "interrupted")
 
     if state == "running":
         cur = cyc.get("current")
         seen, expected = cyc.get("seen"), cyc.get("expected")
         if cur:
             detail = f"Exporting {cur}"
+        elif cyc.get("phase") == "starting_resolve":
+            detail = "Starting DaVinci Resolve hidden"
         elif cyc.get("phase") == "connecting":
             detail = "Connecting to Resolve"
         else:
@@ -126,6 +129,9 @@ def summarize(status: dict | None, offline: bool = False, denied: bool = False) 
         return {**out, "key": "wait", "colour": "wait", "title": "Waiting for Resolve", "detail": d}
     if state == "outside_active_hours":
         ah = cfg.get("active_hours") or []
+        if nxt:
+            return {**out, "key": "rest", "colour": "idle", "title": "Out of hours",
+                    "detail": f"Checking less often. Next at {nxt}"}
         return {**out, "key": "rest", "colour": "idle",
                 "title": f"Resting until {ah[0]}" if ah else "Resting",
                 "detail": "Back up now still works"}

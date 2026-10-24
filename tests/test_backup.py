@@ -9,6 +9,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import resolve_cloud_backup as rcb  # noqa: E402
 
+# Never start or quit a real DaVinci Resolve from the tests; tests that need it pass fakes.
+rcb.HiddenResolve.available = staticmethod(lambda cfg: False)
+
 FMT = "%a %b %d %H:%M:%S %Y"
 
 

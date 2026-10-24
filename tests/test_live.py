@@ -13,6 +13,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import resolve_cloud_backup as rcb  # noqa: E402
+
+# Never start or quit a real DaVinci Resolve from the tests; tests that need it pass fakes.
+rcb.HiddenResolve.available = staticmethod(lambda cfg: False)
 from test_backup import Clock, FakePM, FakeResolve, stamp  # noqa: E402
 
 TOKEN = "t" * 32
@@ -218,7 +221,7 @@ class SettingsValidation(unittest.TestCase):
         blocker = Path(tempfile.mkdtemp()) / "file"
         blocker.write_text("x")
         _, errs = rcb.validate_settings({
-            "interval_minutes": 0, "retry_minutes": "5", "active_hours": ["25:00", "22:00"],
+            "interval_minutes": -1, "retry_minutes": "5", "active_hours": ["25:00", "22:00"],
             "backup_dir": str(blocker / "sub"), "load_to_export": "sometimes", "include": "x",
             "retention": {"keep_all_hours": -1, "max_backups": -3}, "alert_command": "rm -rf /", "min_free_gb": True})
         for k in ("interval_minutes", "retry_minutes", "active_hours", "backup_dir", "load_to_export",
@@ -377,7 +380,7 @@ class DashboardTests(LiveBase):
         _, s = self.req("GET", "/api/settings", self.AUTH)
         self.assertEqual(s["settings"]["interval_minutes"], 30)
         self.assertNotIn("alert_command", s["settings"])          # not editable from the browser
-        code, r = self.req("POST", "/api/settings", self.AUTH, {"interval_minutes": 0})
+        code, r = self.req("POST", "/api/settings", self.AUTH, {"interval_minutes": -1})
         self.assertEqual((code, r["ok"]), (400, False))
         self.assertIn("interval_minutes", r["errors"])
         code, r = self.req("POST", "/api/settings", self.AUTH, {"interval_minutes": 20, "include": ["Client"]})
