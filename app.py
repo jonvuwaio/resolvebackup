@@ -15,6 +15,8 @@ import menubar
 
 
 def main() -> int:
+    if sys.argv[1:2] == [rcb.WATCHDOG_FLAG]:  # started by the app itself to look after a hidden Resolve
+        return rcb.main(sys.argv[1:])
     rcb.setup_logging(False)
     cfg_path = rcb.default_config_path()
     first_run = not cfg_path.exists()

@@ -197,7 +197,16 @@ about 80 seconds hidden against about 17 minutes through an open Resolve.
   hidden copy and opens Resolve normally for you, so it takes a few seconds longer to appear than usual.
   The interrupted check carries on next time.
 - **When you have Resolve open,** checks go through your Resolve as before.
-- A hidden Resolve left running (for example if the app was force-quit) is used by the next check and then quit.
+- **If the app stops during a hidden check** (crash, force-quit), a small watchdog (the app's own program, started
+  alongside each hidden Resolve, idle otherwise) quits the hidden Resolve properly within a few seconds and puts back
+  your library choice. If you had tried to open Resolve meanwhile, it then opens it for you.
+- **If the hidden Resolve crashes,** the check ends and your library choice is put back straight away. Resolve may
+  show its own crash-report window.
+- **If the power goes,** your library choice is put back when the app next starts (at login). Open Resolve before
+  that and it opens on the library that was being checked; switch back once in the Project Manager. The choice is
+  only ever changed by writing a new file and swapping it in one step, so it is never left half-written.
+- A hidden Resolve left running (for example if the watchdog was stopped too) is used by the next check and then
+  quit.
 - Turn it off with `"background_resolve": false` (or the Settings checkbox).
 
 ## Restoring locally
@@ -223,7 +232,7 @@ Manager → *Import Project*, and pick the newest `.drp` from the project's back
 python3 -m unittest discover -s tests -v
 ```
 
-The 126 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
+The 133 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
 collaboration scenarios, backoff and alerts, `probe`, database switching, retention, caps, filters) plus the
 scheduler, the hidden-Resolve hand-over (with faked processes), the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, and the installer.
 

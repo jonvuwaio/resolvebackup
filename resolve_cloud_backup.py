@@ -58,7 +58,7 @@ import webbrowser
 from pathlib import Path
 
 APP = "resolve-cloud-backup"
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -460,6 +460,35 @@ def library_uuid(db_name: str) -> str | None:
     return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
 
 
+def write_atomic(path: Path, text: str, mode: int = 0o600) -> None:
+    """Replace ``path`` with ``text`` in one step, flushed to disk, so a crash or power cut leaves either the old
+    file or the new one, never half of one."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.rcb-tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        os.fchmod(fd, mode)  # not narrowed by the umask: Resolve's own files are rw for everyone
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    try:
+        dfd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+
+
 class ActiveLibrary:
     """Resolve's note of which library to open when it starts (``activedb.conf``), e.g.
 
@@ -481,6 +510,12 @@ class ActiveLibrary:
         except (OSError, UnicodeDecodeError):
             return None
 
+    def _mode(self) -> int:
+        try:
+            return self.path.stat().st_mode & 0o777
+        except OSError:
+            return 0o666
+
     def current(self) -> str | None:
         """Id of the cloud library Resolve will open, or None if it will open something else."""
         m = re.search(r"^cloud\*:([0-9a-fA-F-]{36})\s*$", self._read() or "", re.M)
@@ -495,9 +530,9 @@ class ActiveLibrary:
             return True
         try:
             if not self.saved.exists():
-                _write_private(self.saved, text)
-            with open(self.path, "w", encoding="utf-8") as fh:  # in place: keeps Resolve's owner and mode
-                fh.write(new)
+                self.saved.parent.mkdir(parents=True, exist_ok=True)
+                write_atomic(self.saved, text)
+            write_atomic(self.path, new, self._mode())
         except OSError as e:
             log.warning("Could not choose the library for the hidden Resolve: %s", e)
             return False
@@ -514,8 +549,7 @@ class ActiveLibrary:
             log.warning("Resolve's library choice changed while a hidden check ran; leaving it as it is")
         else:
             try:
-                with open(self.path, "w", encoding="utf-8") as fh:
-                    fh.write(orig)
+                write_atomic(self.path, orig, self._mode())
             except OSError as e:
                 log.error("Could not put back Resolve's library choice (%s). Its original is in %s", e, self.saved)
                 return
@@ -524,6 +558,63 @@ class ActiveLibrary:
             self.saved.unlink()
         except OSError:
             pass
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+WATCHDOG_FLAG = "--rcb-watchdog"
+
+
+def watchdog_command(app_pid: int, resolve_pid: int, cfg_path: Path, conf: Path, saved: Path) -> list[str]:
+    """How to start the watchdog: this same program (the packaged app's executable, or this script)."""
+    arg = json.dumps({"app": app_pid, "resolve": resolve_pid, "config": str(cfg_path), "conf": str(conf),
+                      "saved": str(saved)})
+    if getattr(sys, "frozen", False):
+        return [sys.executable, WATCHDOG_FLAG, arg]
+    return [sys.executable, str(Path(__file__).resolve()), WATCHDOG_FLAG, arg]
+
+
+def start_watchdog(cmd: list[str]) -> None:
+    try:
+        subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True, close_fds=True)
+    except OSError as e:
+        log.warning("Could not start the watchdog for the hidden DaVinci Resolve: %s", e)
+
+
+def run_watchdog(arg: str, alive=pid_alive, sleep=time.sleep, hidden_factory=None) -> int:
+    """Outlives this app for as long as a hidden Resolve it started runs. If the app stops (crash, force-quit)
+    first, quit the hidden Resolve properly, put back the user's library choice and, if they had tried to open
+    Resolve meanwhile, open it for them. Otherwise it does nothing: the app tidies up itself."""
+    a = json.loads(arg)
+    app_pid, resolve_pid = int(a["app"]), int(a["resolve"])
+    lib = ActiveLibrary(Path(a["conf"]), Path(a["saved"]))
+    while True:
+        if not alive(resolve_pid):
+            if not alive(app_pid):
+                lib.restore()
+            return 0
+        if not alive(app_pid):
+            break
+        sleep(1)
+    log.warning("Resolve Backup stopped while a hidden DaVinci Resolve was running; quitting it")
+    try:
+        cfg = load_config(Path(a["config"]))
+    except (OSError, ValueError):
+        cfg = copy.deepcopy(DEFAULTS)
+    h = (hidden_factory or HiddenResolve)(cfg)
+    h.adopt(resolve_pid)
+    h.on_exit = lib.restore
+    h.quit()
+    return 0
 
 
 class HiddenResolve:
@@ -1360,7 +1451,7 @@ class Service:
 
     def __init__(self, cfg_path: Path | None = None, status: LiveStatus | None = None, connect=None,
                  clock=None, wall=time.time, state_dir: Path | None = None, hidden_factory=None,
-                 processes=resolve_processes, active_library: ActiveLibrary | None = None):
+                 processes=resolve_processes, active_library: ActiveLibrary | None = None, watchdog=None):
         self.cfg_path = Path(cfg_path) if cfg_path else default_config_path()
         self.dir = Path(state_dir) if state_dir else app_dir()
         self.cfg = load_config(self.cfg_path)
@@ -1377,6 +1468,8 @@ class Service:
         self.processes = processes
         self.active_library = active_library or ActiveLibrary(resolve_prefs_dir() / "activedb.conf",
                                                               self.dir / "activedb.conf.saved")
+        self.watchdog = watchdog or (lambda pid: start_watchdog(watchdog_command(
+            os.getpid(), pid, self.cfg_path, self.active_library.path, self.active_library.saved)))
         self.backup = Backup(self.cfg, self.dir / "state.json", connect=connect, clock=clock,
                              status=self.status, sleep=lambda s: self._stop.wait(s))
         self.status.set(paused=False, state="starting")
@@ -1470,6 +1563,7 @@ class Service:
         h.on_exit = self.active_library.restore
         if procs:
             h.adopt(hidden[0])
+            self.watchdog(h.pid)
             return h
         lib = self._next_library() if self.cfg.get("rotate_libraries") else None
         if lib and self.active_library.point_at(library_uuid(lib)):
@@ -1477,6 +1571,7 @@ class Service:
             log.info("Hidden check of library %s", self.backup.known_library_names(self.backup.load_state())
                      .get(lib, lib))
         if h.launch():
+            self.watchdog(h.pid)
             return h
         self.active_library.restore()
         return None
@@ -2045,6 +2140,10 @@ def cmd_init(path: Path | None) -> int:
 
 
 def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == [WATCHDOG_FLAG]:
+        setup_logging(False)
+        return run_watchdog(argv[1])
     ap = argparse.ArgumentParser(prog=APP, description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("command", choices=["run", "once", "list", "probe", "status", "init", "dashboard"])
     ap.add_argument("project", nargs="?", help='for `probe`: "Folder/Sub/Project Name"')

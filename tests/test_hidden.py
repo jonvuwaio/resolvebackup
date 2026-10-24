@@ -21,6 +21,7 @@ from test_backup import Clock, FakePM, FakeResolve, stamp  # noqa: E402
 rcb.HiddenResolve.available = staticmethod(lambda cfg: False)
 _fake_prefs = __import__("tempfile").mkdtemp()  # and never edit Resolve's real preferences
 rcb.resolve_prefs_dir = lambda: rcb.Path(_fake_prefs)
+rcb.start_watchdog = lambda cmd: None  # nor start a real watchdog process
 
 EXE = rcb.RESOLVE_EXE
 GUI = EXE
@@ -187,9 +188,10 @@ class ServiceHiddenTests(Base):
         def gui_connect(cfg):
             self.gui_connects += 1
             return FakeResolve(self.pm)
+        self.watched = []
         self.svc = rcb.Service(self.cfg_path, status=self.status, connect=gui_connect, clock=self.clock,
                                state_dir=self.tmp, hidden_factory=lambda cfg: self.hidden(cfg),
-                               processes=lambda: rcb.resolve_processes(self.fs.run))
+                               processes=lambda: rcb.resolve_processes(self.fs.run), watchdog=self.watched.append)
 
     def test_backs_up_through_a_hidden_resolve_when_none_is_open(self):
         self.pm.add([], "Promo", stamp(self.clock.t, minutes=5))
@@ -206,6 +208,7 @@ class ServiceHiddenTests(Base):
         self.assertTrue(seen["resolve"]["hidden"])
         self.assertEqual(list(seen["procs"].values()), [NOGUI])
         self.assertEqual(self.fs.procs, {})               # quit afterwards
+        self.assertEqual(self.watched, [500])             # with a watchdog on it while it ran
         self.assertEqual(self.gui_connects, 0)
         self.assertFalse(self.status.snapshot()["resolve"]["connected"])
 
@@ -225,6 +228,7 @@ class ServiceHiddenTests(Base):
         self.assertEqual(self.pm.exports, ["Promo"])
         self.assertEqual(self.fs.procs, {})
         self.assertNotIn([EXE, "-nogui"], self.fs.commands)
+        self.assertEqual(self.watched, [88])
 
     def test_turned_off_uses_the_normal_connection(self):
         with mock.patch.object(rcb.HiddenResolve, "available", staticmethod(lambda cfg: False)):
@@ -305,7 +309,7 @@ class RotationTests(Base):
     def service(self):
         return rcb.Service(self.cfg_path, status=self.status, connect=lambda c: None, clock=self.clock,
                            state_dir=self.tmp, hidden_factory=lambda cfg: self.hidden(cfg),
-                           processes=lambda: rcb.resolve_processes(self.fs.run),
+                           processes=lambda: rcb.resolve_processes(self.fs.run), watchdog=lambda pid: None,
                            active_library=rcb.ActiveLibrary(self.conf, self.tmp / "activedb.conf.saved"))
 
     def connect(self, cfg):
@@ -391,6 +395,89 @@ class RotationTests(Base):
     def test_library_uuid(self):
         self.assertEqual(rcb.library_uuid(dbname(A)), A)
         self.assertIsNone(rcb.library_uuid("Local Database"))
+
+class SafetyTests(Base):
+    """What happens when the app or the power goes while a hidden check has Resolve's library choice changed."""
+
+    def setUp(self):
+        super().setUp()
+        self.conf = self.tmp / "activedb.conf"
+        self.conf.write_text(ORIGINAL)
+        self.conf.chmod(0o666)
+        self.saved = self.tmp / "app" / "activedb.conf.saved"
+        self.lib = rcb.ActiveLibrary(self.conf, self.saved)
+        self.dead = set()
+
+    def watchdog(self, app=1, resolve=None):
+        arg = json.dumps({"app": app, "resolve": resolve, "config": str(self.tmp / "none.json"),
+                          "conf": str(self.conf), "saved": str(self.saved)})
+        alive = lambda pid: pid not in self.dead and (pid == app or pid in self.fs.procs)  # noqa: E731
+        return rcb.run_watchdog(arg, alive=alive, sleep=lambda s: self.ticks.pop(0)() if self.ticks else None,
+                                hidden_factory=lambda cfg: self.hidden(cfg))
+
+    def test_writes_are_atomic_and_keep_resolves_permissions(self):
+        self.assertTrue(self.lib.point_at(C))
+        self.assertEqual(self.conf.read_text().splitlines()[0], f"cloud*:{C}")
+        self.assertEqual(self.conf.stat().st_mode & 0o777, 0o666)
+        self.assertEqual(self.saved.read_text(), ORIGINAL)
+        self.assertEqual([p.name for p in self.tmp.iterdir() if "rcb-tmp" in p.name], [])
+        self.lib.restore()
+        self.assertEqual(self.conf.read_text(), ORIGINAL)
+        self.assertEqual(self.conf.stat().st_mode & 0o777, 0o666)
+
+    def test_a_failed_write_leaves_the_old_file(self):
+        with mock.patch.object(rcb.os, "replace", side_effect=OSError("disk gone")):
+            self.assertFalse(self.lib.point_at(C))
+        self.assertEqual(self.conf.read_text(), ORIGINAL)
+        self.assertEqual([p.name for p in self.tmp.iterdir() if "rcb-tmp" in p.name], [])
+
+    def test_watchdog_quits_the_hidden_resolve_when_the_app_dies(self):
+        h = self.hidden()
+        h.launch()
+        self.lib.point_at(C)
+        self.ticks = [lambda: None, lambda: self.dead.add(1)]   # the app is force-quit a moment later
+        self.watchdog(resolve=h.pid)
+        self.assertEqual(self.fs.procs, {})                    # hidden Resolve quit...
+        self.assertEqual(self.fs.signals, [])                  # ...properly, through scripting
+        self.assertEqual(self.conf.read_text(), ORIGINAL)      # and the user's choice put back
+        self.assertNotIn("open", [c[0] for c in self.fs.commands])
+
+    def test_watchdog_hands_resolve_over_if_the_user_had_opened_it(self):
+        h = self.hidden()
+        h.launch()
+        self.lib.point_at(C)
+        self.fs.front = h.pid
+        conf_at_open = []
+        real_run = self.fs.run
+        self.fs.run = lambda cmd, **kw: (conf_at_open.append(self.conf.read_text()) if cmd[0] == "open" else None,
+                                         real_run(cmd, **kw))[1]
+        self.dead.add(1)
+        self.watchdog(resolve=h.pid)
+        self.assertEqual(conf_at_open, [ORIGINAL])             # put back before Resolve opened for them
+
+    def test_watchdog_does_nothing_while_the_app_is_alive(self):
+        h = self.hidden()
+        h.launch()
+        self.lib.point_at(C)
+        self.ticks = [lambda: self.fs.procs.clear()]           # the app quits it normally
+        self.watchdog(resolve=h.pid)
+        self.assertEqual(self.conf.read_text().splitlines()[0], f"cloud*:{C}")   # the app restores, not us
+        self.assertTrue(self.saved.exists())
+
+    def test_watchdog_restores_if_both_are_gone(self):
+        self.lib.point_at(C)
+        self.dead.add(1)
+        self.ticks = []
+        self.watchdog(resolve=12345)
+        self.assertEqual(self.conf.read_text(), ORIGINAL)
+
+    def test_watchdog_command(self):
+        cmd = rcb.watchdog_command(1, 2, Path("/c.json"), self.conf, self.saved)
+        self.assertEqual(cmd[1:3], [str(Path(rcb.__file__).resolve()), rcb.WATCHDOG_FLAG])
+        self.assertEqual(json.loads(cmd[3])["resolve"], 2)
+        with mock.patch.object(rcb.sys, "frozen", True, create=True):
+            self.assertEqual(rcb.watchdog_command(1, 2, Path("/c.json"), self.conf, self.saved)[1],
+                             rcb.WATCHDOG_FLAG)
 
 class ScheduleTests(unittest.TestCase):
     def setUp(self):
