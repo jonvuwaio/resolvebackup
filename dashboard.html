@@ -283,7 +283,10 @@ body.open #drawer { transform: none; visibility: visible; }
       <div class="err" data-err="active_hours"></div><div class="err" data-err="off_hours_interval_minutes"></div></div>
     <div class="f" id="bgRow"><label class="check"><input type="checkbox" id="background_resolve"> When Resolve is closed, open it hidden to back up</label>
       <div class="hint">Resolve starts with no windows, backs up, then quits. If you open Resolve while it's running hidden, it's reopened normally for you after a few seconds.</div>
-      <div class="err" data-err="background_resolve"></div></div>
+      <div class="err" data-err="background_resolve"></div>
+      <label class="check" style="margin-top:10px"><input type="checkbox" id="rotate_libraries"> Back up every cloud library in turn</label>
+      <div class="hint">Each hidden check opens the library checked longest ago. Your own Resolve still opens the library you last used.</div>
+      <div class="err" data-err="rotate_libraries"></div></div>
     <div class="f"><label for="load_to_export">If a project can't be exported directly</label>
       <select id="load_to_export">
         <option value="auto">Open it read-only, export it, then close it</option>
@@ -339,6 +342,7 @@ body.open #drawer { transform: none; visibility: visible; }
     switch_database_failed: "Couldn't switch database", switch_failed: "Couldn't switch database",
     no_project_manager: "Resolve's Project Manager wasn't available", error: "The check hit an error",
     interrupted: "Stopped part way so you could use Resolve",
+    library_not_opened: "A library didn't open in the hidden Resolve",
   };
   const HELP = {
     resolve_unavailable: "Open DaVinci Resolve Studio, sign in to Blackmagic Cloud, and set Preferences > System > General > External scripting using to Local.",
@@ -641,7 +645,7 @@ body.open #drawer { transform: none; visibility: visible; }
   });
 
   // ---------- settings drawer ----------
-  const FIELDS = ["backup_dir", "interval_minutes", "off_hours_interval_minutes", "background_resolve", "load_to_export", "initial_lookback_days", "keep_all_hours", "keep_daily_days", "db_name", "hours_on", "hours_from", "hours_to", "include", "exclude", "max_on", "max_backups"];
+  const FIELDS = ["backup_dir", "interval_minutes", "off_hours_interval_minutes", "background_resolve", "rotate_libraries", "load_to_export", "initial_lookback_days", "keep_all_hours", "keep_daily_days", "db_name", "hours_on", "hours_from", "hours_to", "include", "exclude", "max_on", "max_backups"];
   let initial = "", opener = null;
   const lines = (id) => $(id).value.split("\n").map((x) => x.trim()).filter(Boolean);
   function collect() {
@@ -649,6 +653,7 @@ body.open #drawer { transform: none; visibility: visible; }
       backup_dir: $("backup_dir").value.trim(), interval_minutes: Number($("interval_minutes").value),
       active_hours: $("hours_on").checked ? [$("hours_from").value, $("hours_to").value] : null,
       off_hours_interval_minutes: Number($("off_hours_interval_minutes").value), background_resolve: $("background_resolve").checked,
+      rotate_libraries: $("rotate_libraries").checked,
       load_to_export: $("load_to_export").value, include: lines("include"), exclude: lines("exclude"),
       initial_lookback_days: Number($("initial_lookback_days").value),
       retention: { keep_all_hours: Number($("keep_all_hours").value), keep_daily_days: Number($("keep_daily_days").value),
@@ -661,7 +666,7 @@ body.open #drawer { transform: none; visibility: visible; }
     $("initial_lookback_days").value = s.initial_lookback_days; $("keep_all_hours").value = s.retention.keep_all_hours; $("keep_daily_days").value = s.retention.keep_daily_days;
     $("max_on").checked = s.retention.max_backups > 0; $("max_backups").value = s.retention.max_backups || 10;
     $("db_name").value = (s.database && s.database.name) || ""; $("include").value = s.include.join("\n"); $("exclude").value = s.exclude.join("\n");
-    $("off_hours_interval_minutes").value = s.off_hours_interval_minutes; $("background_resolve").checked = !!s.background_resolve;
+    $("off_hours_interval_minutes").value = s.off_hours_interval_minutes; $("background_resolve").checked = !!s.background_resolve; $("rotate_libraries").checked = !!s.rotate_libraries;
     $("hours_on").checked = !!s.active_hours; $("hours_from").value = s.active_hours ? s.active_hours[0] : "07:00"; $("hours_to").value = s.active_hours ? s.active_hours[1] : "22:00";
     syncHours();
   }
@@ -675,7 +680,7 @@ body.open #drawer { transform: none; visibility: visible; }
     } catch (e) { err.textContent = "Couldn't open the folder window."; }
     b.disabled = false; b.textContent = "Choose…";
   });
-  const syncHours = () => { $("hours_from").disabled = $("hours_to").disabled = $("off_hours_interval_minutes").disabled = !$("hours_on").checked; $("max_backups").disabled = !$("max_on").checked; };
+  const syncHours = () => { $("hours_from").disabled = $("hours_to").disabled = $("off_hours_interval_minutes").disabled = !$("hours_on").checked; $("max_backups").disabled = !$("max_on").checked; $("rotate_libraries").disabled = !$("background_resolve").checked; };
   const dirty = () => { $("save").disabled = JSON.stringify(collect()) === initial; };
   async function openSettings() {
     opener = document.activeElement;

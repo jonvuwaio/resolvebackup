@@ -16,6 +16,8 @@ import resolve_cloud_backup as rcb  # noqa: E402
 
 # Never start or quit a real DaVinci Resolve from the tests; tests that need it pass fakes.
 rcb.HiddenResolve.available = staticmethod(lambda cfg: False)
+_fake_prefs = __import__("tempfile").mkdtemp()  # and never edit Resolve's real preferences
+rcb.resolve_prefs_dir = lambda: rcb.Path(_fake_prefs)
 from test_backup import Clock, FakePM, FakeResolve, stamp  # noqa: E402
 
 TOKEN = "t" * 32

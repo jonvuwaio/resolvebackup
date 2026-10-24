@@ -57,6 +57,7 @@ STATUS_TEXT = {
     "no_project_manager": "Resolve's Project Manager wasn't available",
     "error": "The check hit an error",
     "interrupted": "Stopped part way so you could use Resolve",
+    "library_not_opened": "A library didn't open in the hidden Resolve",
 }
 
 

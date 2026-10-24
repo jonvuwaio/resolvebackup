@@ -97,11 +97,19 @@ python3 resolve_cloud_backup.py status
 `list` shows the exact `DbType`/`DbName` of your cloud database and the format of `lastModifiedDate`. If your
 cloud database isn't the one currently selected in Resolve, set it in the config (below).
 
-**Several cloud libraries.** Only the library that's open in Resolve can be backed up. Resolve's scripting API
-can't list cloud libraries (in Resolve 21 one appears only as the current database, reported as `PostgreSQL` on an
-AWS address), and `SetCurrentDatabase` refuses to switch into one. A script can switch *out* of a cloud library
-but not back, so this app never switches away from one. Each library you open is backed up into its own folder
-named after the library.
+**Several cloud libraries.** Resolve's scripting API can't list cloud libraries (in Resolve 21 one appears only as
+the current database, reported as `PostgreSQL` on an AWS address), and `SetCurrentDatabase` refuses to switch into
+one. A script can switch *out* of a cloud library but not back, so this app never switches the Resolve you have
+open. Instead, on a Mac, each **hidden** check opens the next library in turn (`rotate_libraries`, on by default):
+before starting the hidden Resolve it changes the line `cloud*:<library id>` in Resolve's
+`~/Library/Preferences/Blackmagic Design/DaVinci Resolve/activedb.conf` (the `*` marks the library Resolve opens at
+start-up), and puts the file back as soon as the hidden Resolve quits, before Resolve is reopened for you. A copy of
+the original is kept in the app's folder until then, so if the app stops part way it is put back the next time
+the app starts. The library checked longest ago goes first. It only ever swaps one cloud library for another: if
+you last used a local or network database, the hidden Resolve opens that and nothing is changed. If Resolve opens
+something other than the library asked for, the check is skipped and reported, and the next library is tried.
+Leave libraries out with `"skip_libraries": ["Name"]`. While you have Resolve open, only the library open in it
+is backed up. Each library is backed up into its own folder named after the library.
 
 The API only reports a cloud library by an internal name (`db_<id>`). The real name comes from the line
 `BlackmagicID: PL(<id>:'<name>':…)` that Resolve writes to its own log (`ResolveDebug.txt`) for every library your
@@ -125,6 +133,8 @@ Changes apply from the next cycle without restarting. Only the dashboard port ne
 | `active_hours` | `null` | e.g. `["07:00","22:00"]`. May wrap midnight. |
 | `off_hours_interval_minutes` | `0` | Outside `active_hours`, check this often instead. `0` = not at all. The first check of the day still runs when `active_hours` starts. |
 | `background_resolve` | `true` | macOS: while Resolve isn't open, start it hidden for each check, then quit it. See "Hidden Resolve". |
+| `rotate_libraries` | `true` | With `background_resolve`: each hidden check opens the next of your cloud libraries in turn. See "Several cloud libraries". |
+| `skip_libraries` | `[]` | Library names to leave out of the rotation. |
 | `resolve_app` | `null` | Path to Resolve's executable for `background_resolve`; null = `/Applications/DaVinci Resolve/…/MacOS/Resolve`. |
 | `database` | `{name: null, type: null}` | Database to back up; null = whichever is current in Resolve. |
 | `switch_database` | `false` | Allow switching to `database` if it isn't current. Only ever done when no project is open. |
@@ -180,7 +190,7 @@ A hidden Resolve avoids that, and is far faster: on a real 829-project cloud lib
 about 80 seconds hidden against about 17 minutes through an open Resolve.
 
 - **When you don't have Resolve open,** each check starts `Resolve -nogui`, waits for it to answer (about
-  15 seconds), backs up whichever library Resolve last had open, and quits it. You may see Resolve's Dock icon
+  15 seconds), backs up the next cloud library in turn (see "Several cloud libraries"), and quits it. You may see Resolve's Dock icon
   while it runs, but no windows.
 - **Resolve runs one copy at a time.** Opening Resolve from the Dock or Finder while the hidden copy runs only
   brings the hidden copy forward, with no window. The service notices, stops the check between projects, quits the
@@ -213,7 +223,7 @@ Manager → *Import Project*, and pick the newest `.drp` from the project's back
 python3 -m unittest discover -s tests -v
 ```
 
-The 118 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
+The 126 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
 collaboration scenarios, backoff and alerts, `probe`, database switching, retention, caps, filters) plus the
 scheduler, the hidden-Resolve hand-over (with faked processes), the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, and the installer.
 

@@ -19,6 +19,8 @@ from test_backup import Clock, FakePM, FakeResolve, stamp  # noqa: E402
 
 # Never start or quit a real DaVinci Resolve from the tests; tests that need it pass fakes.
 rcb.HiddenResolve.available = staticmethod(lambda cfg: False)
+_fake_prefs = __import__("tempfile").mkdtemp()  # and never edit Resolve's real preferences
+rcb.resolve_prefs_dir = lambda: rcb.Path(_fake_prefs)
 
 EXE = rcb.RESOLVE_EXE
 GUI = EXE
@@ -251,6 +253,144 @@ class ServiceHiddenTests(Base):
         self.svc.tick()
         self.assertEqual(len(self.pm.exports), 5)
 
+
+
+A = "c31fb696-ac7b-4ad7-90cf-73708407fb40"
+B = "0af96a7b-28e8-4037-9211-489e97dd6489"
+C = "9089d4db-5a9c-48cc-abe5-ed5ce2eb0899"
+NAMES = {A: "WashOrgSrvrDB_1", B: "WashOrgBackup_1", C: "WashOrgSrvrDyson_1"}
+ORIGINAL = f"cloud*:{A}\ndisk:Local Database\nnetwork:washdb2023_110.0.0.53\n"
+
+
+def dbname(uuid):
+    return "db_" + uuid.replace("-", "")
+
+
+class RotationTests(Base):
+    """Each hidden check opens the next cloud library by editing Resolve's activedb.conf, then puts it back."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(rcb.HiddenResolve, "available", staticmethod(lambda cfg: True))
+        p.start()
+        self.addCleanup(p.stop)
+        logs = self.tmp / "logs"
+        logs.mkdir()
+        (logs / "ResolveDebug.txt").write_text("".join(f"BlackmagicID: PL({u}:'{n}':D)\n" for u, n in NAMES.items()))
+        orig_dirs = rcb.resolve_log_dirs
+        rcb.resolve_log_dirs = lambda: [logs]
+        self.addCleanup(setattr, rcb, "resolve_log_dirs", orig_dirs)
+        self.conf = self.tmp / "prefs" / "activedb.conf"
+        self.conf.parent.mkdir()
+        self.conf.write_text(ORIGINAL)
+        self.cfg_path = self.tmp / "config.json"
+        self.write_cfg()
+        self.clock = Clock(dt.datetime(2026, 10, 13, 12, 0, 0))
+        self.status = rcb.LiveStatus()
+        self.opened = []          # library each hidden Resolve opened
+        self.conf_when_opened_for_user = None
+        self.fallback = None      # set to make Resolve ignore the file and open this instead
+        real_run = self.fs.run
+
+        def run(cmd, **kw):
+            if cmd[0] == "open":
+                self.conf_when_opened_for_user = self.conf.read_text()
+            return real_run(cmd, **kw)
+        self.fs.run = run
+
+    def write_cfg(self, **over):
+        self.cfg_path.write_text(json.dumps({"backup_dir": str(self.tmp / "out"), "min_free_gb": 0,
+                                             "pause_between_exports_seconds": 0, "dashboard": {"port": 0}, **over}))
+
+    def service(self):
+        return rcb.Service(self.cfg_path, status=self.status, connect=lambda c: None, clock=self.clock,
+                           state_dir=self.tmp, hidden_factory=lambda cfg: self.hidden(cfg),
+                           processes=lambda: rcb.resolve_processes(self.fs.run),
+                           active_library=rcb.ActiveLibrary(self.conf, self.tmp / "activedb.conf.saved"))
+
+    def connect(self, cfg):
+        r = super().connect(cfg)
+        if r:
+            m = rcb.re.search(r"^cloud\*:(\S+)$", self.conf.read_text(), rcb.re.M)
+            db = self.fallback or {"DbType": "PostgreSQL", "DbName": dbname(m.group(1)), "IpAddress": "aws"}
+            self.pm.db = db
+            self.opened.append((db["DbName"], self.connects))
+        return r
+
+    def check(self, svc):
+        self.connects = 0
+        svc.request_run_now()
+        svc.tick()
+        self.assertEqual(self.fs.procs, {})
+        return self.status.snapshot()["last_cycle"]["status"]
+
+    def test_takes_each_library_in_turn_and_puts_the_choice_back(self):
+        svc = self.service()
+        for _ in range(4):
+            self.assertEqual(self.check(svc), "ok")
+            self.assertEqual(self.conf.read_text(), ORIGINAL)       # back as the user left it
+            self.clock.advance(minutes=2)
+        # never-checked libraries first, alphabetically: Backup, SrvrDB, SrvrDyson; then the oldest again
+        self.assertEqual([o[0] for o in self.opened], [dbname(B), dbname(A), dbname(C), dbname(B)])
+        self.assertFalse((self.tmp / "activedb.conf.saved").exists())
+        st = svc.backup.load_state()
+        self.assertEqual({r["folder"] for r in st["databases"].values()}, set(NAMES.values()))
+
+    def test_skip_libraries(self):
+        self.write_cfg(skip_libraries=["WashOrgBackup_1"])
+        svc = self.service()
+        self.check(svc)
+        self.clock.advance(minutes=2)
+        self.check(svc)
+        self.assertEqual([o[0] for o in self.opened], [dbname(A), dbname(C)])
+
+    def test_turned_off_leaves_the_file_alone(self):
+        self.write_cfg(rotate_libraries=False)
+        svc = self.service()
+        self.check(svc)
+        self.assertEqual([o[0] for o in self.opened], [dbname(A)])
+        self.assertEqual(self.conf.read_text(), ORIGINAL)
+
+    def test_library_that_does_not_open_is_reported_and_skipped_next_time(self):
+        svc = self.service()
+        self.fallback = {"DbType": "Disk", "DbName": "Local Database"}
+        self.assertEqual(self.check(svc), "library_not_opened")
+        self.assertEqual(self.conf.read_text(), ORIGINAL)
+        self.fallback = None
+        self.clock.advance(minutes=2)
+        self.assertEqual(self.check(svc), "ok")
+        self.assertEqual(self.opened[-1][0], dbname(A))                # moved on from Backup
+        self.assertNotIn("Local Database", json.dumps(svc.backup.load_state().get("databases", {})))
+
+    def test_only_swaps_a_cloud_library_for_another(self):
+        self.conf.write_text("disk*:Local Database\n")
+        svc = self.service()
+        self.fallback = {"DbType": "Disk", "DbName": "Local Database"}
+        self.assertEqual(self.check(svc), "ok")
+        self.assertEqual(self.conf.read_text(), "disk*:Local Database\n")
+
+    def test_choice_put_back_before_resolve_is_reopened_for_the_user(self):
+        svc = self.service()
+        self.pm.add([], "P", stamp(self.clock.t, minutes=5))
+        orig = self.pm.ExportProject
+
+        def spy(name, path, stills=True):
+            self.fs.front = next(p for p, a in self.fs.procs.items() if "-nogui" in a)
+            return orig(name, path, stills)
+        self.pm.ExportProject = spy
+        self.check(svc)
+        self.assertEqual(self.conf_when_opened_for_user, ORIGINAL)
+
+    def test_left_changed_by_a_crash_is_put_back_at_start_up(self):
+        (self.tmp / "activedb.conf.saved").write_text(ORIGINAL)
+        self.conf.write_text(f"cloud*:{C}\ndisk:Local Database\n")
+        self.service()
+        self.assertEqual(self.conf.read_text(), ORIGINAL)
+        self.assertFalse((self.tmp / "activedb.conf.saved").exists())
+
+    def test_library_uuid(self):
+        self.assertEqual(rcb.library_uuid(dbname(A)), A)
+        self.assertIsNone(rcb.library_uuid("Local Database"))
 
 class ScheduleTests(unittest.TestCase):
     def setUp(self):

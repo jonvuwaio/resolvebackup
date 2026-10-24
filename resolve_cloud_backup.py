@@ -58,7 +58,7 @@ import webbrowser
 from pathlib import Path
 
 APP = "resolve-cloud-backup"
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -76,6 +76,11 @@ DEFAULTS = {
     # macOS: while DaVinci Resolve isn't open, start it hidden (-nogui) for each cycle and quit it afterwards,
     # so nothing appears on screen. Open Resolve while it runs hidden and it is quit and opened normally.
     "background_resolve": True,
+    # With background_resolve: each hidden check opens the next of your cloud libraries in turn (the one checked
+    # longest ago), so every library is backed up without switching in Resolve. Your own choice is put back
+    # as soon as the hidden Resolve quits. skip_libraries: library names to leave out.
+    "rotate_libraries": True,
+    "skip_libraries": [],
     # Which Resolve database to back up. name=None means "whichever is current".
     # type is optional ("Cloud", "PostgreSQL", "Disk" ...) - run `list` to see what
     # Resolve reports for yours.
@@ -442,6 +447,85 @@ def front_app_pid(run=subprocess.run) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def resolve_prefs_dir() -> Path:
+    return Path.home() / "Library/Preferences/Blackmagic Design/DaVinci Resolve"
+
+
+def library_uuid(db_name: str) -> str | None:
+    """"db_c31fb696ac7b4ad790cf73708407fb40" -> "c31fb696-ac7b-4ad7-90cf-73708407fb40" (a cloud library's id)."""
+    m = re.fullmatch(r"db_([0-9a-f]{32})", db_name or "")
+    if not m:
+        return None
+    h = m.group(1)
+    return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
+
+
+class ActiveLibrary:
+    """Resolve's note of which library to open when it starts (``activedb.conf``), e.g.
+
+        cloud*:c31fb696-ac7b-4ad7-90cf-73708407fb40      <- the * marks the one Resolve opens
+        disk:Local Database
+
+    Scripts can't switch into a cloud library, but a Resolve started after this file is changed opens the library
+    it names. ``point_at`` keeps the original in ``saved`` until ``restore`` puts it back, so the user's own Resolve
+    opens where they left it, even if this app stopped part way.
+    """
+
+    def __init__(self, path: Path, saved: Path):
+        self.path, self.saved = Path(path), Path(saved)
+        self._written: str | None = None
+
+    def _read(self) -> str | None:
+        try:
+            return self.path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+
+    def current(self) -> str | None:
+        """Id of the cloud library Resolve will open, or None if it will open something else."""
+        m = re.search(r"^cloud\*:([0-9a-fA-F-]{36})\s*$", self._read() or "", re.M)
+        return m.group(1).lower() if m else None
+
+    def point_at(self, uuid: str) -> bool:
+        text = self._read()
+        if text is None or not re.search(r"^cloud\*:", text, re.M):
+            return False  # only ever swap one cloud library for another
+        new = re.sub(r"^cloud\*:.*$", f"cloud*:{uuid}", text, count=1, flags=re.M)
+        if new == text:
+            return True
+        try:
+            if not self.saved.exists():
+                _write_private(self.saved, text)
+            with open(self.path, "w", encoding="utf-8") as fh:  # in place: keeps Resolve's owner and mode
+                fh.write(new)
+        except OSError as e:
+            log.warning("Could not choose the library for the hidden Resolve: %s", e)
+            return False
+        self._written = new
+        return True
+
+    def restore(self) -> None:
+        try:
+            orig = self.saved.read_text(encoding="utf-8")
+        except OSError:
+            return
+        now = self._read()
+        if self._written is not None and now is not None and now != self._written:
+            log.warning("Resolve's library choice changed while a hidden check ran; leaving it as it is")
+        else:
+            try:
+                with open(self.path, "w", encoding="utf-8") as fh:
+                    fh.write(orig)
+            except OSError as e:
+                log.error("Could not put back Resolve's library choice (%s). Its original is in %s", e, self.saved)
+                return
+        self._written = None
+        try:
+            self.saved.unlink()
+        except OSError:
+            pass
+
+
 class HiddenResolve:
     """DaVinci Resolve started with -nogui for one backup cycle, so nothing flicks up on screen (macOS).
 
@@ -464,6 +548,8 @@ class HiddenResolve:
         self.resolve = None
         self.handed_over = False
         self._last_look = None
+        self.on_exit = lambda: None   # runs once Resolve has quit, before it is reopened for the user
+        self.library: str | None = None  # DbName this session asked Resolve to open, if any
 
     @staticmethod
     def available(cfg: dict) -> bool:
@@ -530,6 +616,9 @@ class HiddenResolve:
 
     def quit(self) -> None:
         """Quit the hidden Resolve; if the user asked for Resolve meanwhile, open it normally for them."""
+        if self.alive():
+            self._last_look = None
+            self.wanted()  # one last look: the user may have opened Resolve during the last project
         if self.resolve is None and self.alive():
             # Still starting up. Killing it now makes Resolve show its crash reporter, so give it a minute
             # to answer scripting calls and ask it to quit properly.
@@ -550,6 +639,10 @@ class HiddenResolve:
                 self._signal(signal.SIGKILL)
                 self._wait_exit(10)
         log.info("Quit hidden DaVinci Resolve")
+        try:
+            self.on_exit()
+        except Exception:  # noqa: BLE001
+            log.exception("Could not tidy up after the hidden DaVinci Resolve")
         if self.handed_over:
             app = self.exe.split("/Contents/MacOS/")[0]
             try:
@@ -632,7 +725,7 @@ class EventHandler(logging.Handler):
 
 # ------------------------------------------------------- settings from the UI
 EDITABLE = ("backup_dir", "interval_minutes", "retry_minutes", "active_hours", "off_hours_interval_minutes",
-            "background_resolve", "initial_lookback_days",
+            "background_resolve", "rotate_libraries", "skip_libraries", "initial_lookback_days",
             "include", "exclude", "load_to_export", "save_open_project", "switch_database", "database",
             "with_stills_and_luts", "max_exports_per_cycle", "min_free_gb", "retention")
 
@@ -657,7 +750,8 @@ def validate_settings(inc: dict) -> tuple[dict, dict]:
                         ("min_free_gb", 0, 100000)):
         if key in inc:
             whole(key, lo, hi)
-    for key in ("save_open_project", "switch_database", "with_stills_and_luts", "background_resolve"):
+    for key in ("save_open_project", "switch_database", "with_stills_and_luts", "background_resolve",
+                "rotate_libraries"):
         if key in inc:
             if isinstance(inc[key], bool):
                 clean[key] = inc[key]
@@ -668,7 +762,7 @@ def validate_settings(inc: dict) -> tuple[dict, dict]:
             clean["load_to_export"] = inc["load_to_export"]
         else:
             errs["load_to_export"] = "Choose never, collab, auto or always."
-    for key in ("include", "exclude"):
+    for key in ("include", "exclude", "skip_libraries"):
         if key in inc:
             v = inc[key]
             if isinstance(v, list) and all(isinstance(x, str) for x in v):
@@ -841,7 +935,7 @@ class Backup:
         os.replace(tmp, self.state_file)
 
     # ---- one cycle
-    def cycle(self, connect=None, interrupted=None, hidden: bool = False) -> dict:
+    def cycle(self, connect=None, interrupted=None, hidden: bool = False, expect_db: str | None = None) -> dict:
         """One pass over the open library. ``connect`` overrides how Resolve is reached (the hidden copy);
         ``interrupted()`` returning True stops the pass early, between projects."""
         stats = {"status": "ok", "seen": 0, "exported": 0, "unchanged": 0, "skipped_old": 0,
@@ -888,6 +982,13 @@ class Backup:
                                  "library": self.known_library_names(state).get(orig_db.get("DbName")),
                                  "database_type": orig_db.get("DbType"), "open_project": open_name})
         self.status.update_cycle(phase="scanning")
+        if expect_db:
+            state.setdefault("library_attempts", {})[expect_db] = now.isoformat(timespec="seconds")
+            if orig_db.get("DbName") != expect_db:
+                log.warning("Asked the hidden Resolve to open library %s but it opened %s; trying the next one",
+                            self.known_library_names(state).get(expect_db, expect_db), orig_db.get("DbName"))
+                stats["status"] = "library_not_opened"
+                return self._finish(stats, state)
 
         want = self.cfg["database"]
         target, switched = orig_db, False
@@ -986,8 +1087,8 @@ class Backup:
         return name
 
     def _remember_database(self, db: dict, ctx: dict, state: dict) -> None:
-        """Record each database (cloud library) checked. Scripts can't switch into a cloud library, so one is
-        only backed up while it is open in Resolve; this lets the dashboard show libraries going stale."""
+        """Record each database (cloud library) checked, so the dashboard can show libraries going stale and the
+        hidden Resolve can take them in turn."""
         at = ctx["now"].isoformat(timespec="seconds")
         rec = state.setdefault("databases", {}).setdefault(self._db_key(db), {})
         rec.setdefault("first_seen", at)
@@ -1259,7 +1360,7 @@ class Service:
 
     def __init__(self, cfg_path: Path | None = None, status: LiveStatus | None = None, connect=None,
                  clock=None, wall=time.time, state_dir: Path | None = None, hidden_factory=None,
-                 processes=resolve_processes):
+                 processes=resolve_processes, active_library: ActiveLibrary | None = None):
         self.cfg_path = Path(cfg_path) if cfg_path else default_config_path()
         self.dir = Path(state_dir) if state_dir else app_dir()
         self.cfg = load_config(self.cfg_path)
@@ -1274,12 +1375,17 @@ class Service:
         self.next_run = wall()  # first cycle straight away
         self.hidden_factory = hidden_factory or (lambda cfg: HiddenResolve(cfg, connect=connect))
         self.processes = processes
+        self.active_library = active_library or ActiveLibrary(resolve_prefs_dir() / "activedb.conf",
+                                                              self.dir / "activedb.conf.saved")
         self.backup = Backup(self.cfg, self.dir / "state.json", connect=connect, clock=clock,
                              status=self.status, sleep=lambda s: self._stop.wait(s))
         self.status.set(paused=False, state="starting")
         last = self.backup.load_state().get("last_cycle")
         if last:
             self.status.set(last_cycle=last)
+        if self.active_library.saved.exists() and HiddenResolve.available(self.cfg) and not self.processes():
+            log.info("Putting back Resolve's library choice, left changed when this app last stopped")
+            self.active_library.restore()
 
     # ---- controls (called from the dashboard thread)
     def stop(self) -> None:
@@ -1357,15 +1463,37 @@ class Service:
         if not HiddenResolve.available(self.cfg):
             return None
         procs = self.processes()
-        if not procs:
-            h = self.hidden_factory(self.cfg)
-            return h if h.launch() else None
         hidden = [pid for pid, args in procs if " -nogui" in args]
-        if len(hidden) == len(procs):
-            h = self.hidden_factory(self.cfg)
+        if procs and len(hidden) < len(procs):
+            return None  # the user has Resolve open
+        h = self.hidden_factory(self.cfg)
+        h.on_exit = self.active_library.restore
+        if procs:
             h.adopt(hidden[0])
             return h
+        lib = self._next_library() if self.cfg.get("rotate_libraries") else None
+        if lib and self.active_library.point_at(library_uuid(lib)):
+            h.library = lib
+            log.info("Hidden check of library %s", self.backup.known_library_names(self.backup.load_state())
+                     .get(lib, lib))
+        if h.launch():
+            return h
+        self.active_library.restore()
         return None
+
+    def _next_library(self) -> str | None:
+        """The cloud library (DbName) checked longest ago, never-checked ones first; None if none is known."""
+        state = self.backup.load_state()
+        names = self.backup.known_library_names(state)
+        skip = set(self.cfg.get("skip_libraries") or [])
+        last: dict[str, str] = {}
+        for rec in state.get("databases", {}).values():
+            if rec.get("DbName"):
+                last[rec["DbName"]] = max(last.get(rec["DbName"], ""), rec.get("last_checked") or "")
+        for db, at in (state.get("library_attempts") or {}).items():
+            last[db] = max(last.get(db, ""), at or "")
+        cands = [db for db, name in names.items() if library_uuid(db) and name not in skip and db not in skip]
+        return min(cands, key=lambda db: (last.get(db, ""), names[db].lower())) if cands else None
 
     # ---- the loop body
     def _run_cycle(self) -> None:
@@ -1380,7 +1508,8 @@ class Service:
             if hidden:
                 status = self.backup.cycle(
                     connect=lambda cfg: hidden.connect(cfg, lambda: self.stopping),
-                    interrupted=lambda: self.stopping or hidden.wanted(), hidden=True)["status"]
+                    interrupted=lambda: self.stopping or hidden.wanted(), hidden=True,
+                    expect_db=hidden.library)["status"]
             else:
                 status = self.backup.cycle(interrupted=lambda: self.stopping)["status"]
         except Exception:  # noqa: BLE001
