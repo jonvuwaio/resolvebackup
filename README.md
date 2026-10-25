@@ -209,6 +209,32 @@ about 80 seconds hidden against about 17 minutes through an open Resolve.
   quit.
 - Turn it off with `"background_resolve": false` (or the Settings checkbox).
 
+## New project set-up
+
+**New project** (dashboard header, or **New project…** in the menu bar) makes a job's folders in one go:
+
+1. Pick the **project drive**: the RAID of the workstation the job is on. **Add a drive…** at the bottom of the
+   list offers every connected drive that isn't set up yet, already filled in as `Projects/<Client>/<Job>` with
+   the `Project` template (change either for a drive that's laid out differently).
+2. Fill in the **job number** (the next free one is suggested, from every drive and every backed-up project),
+   the **client folder** (pick an existing one or type a new one), the **client as it appears in the job name**
+   (filled in from that client's last job) and the **job title**. Spaces in the title become underscores.
+   The job name, for example `WC105_WSM_Varley_Spring26`, and every path are previewed live.
+3. Tick any extra locations (for example deliverables) and press **Create folders**.
+
+Templates are the folders inside the templates folder (for example `/Volumes/WashDeliverables/FolderStructures`).
+Each top-level folder there is one template, and its sub-folders are copied (empty) into the new job, so changing a
+template there changes every job made after. Placeholders such as `{job}` work in template folder names too.
+
+Safety: nothing is touched until **Create folders**; an existing job folder is never added to; if anything fails
+part way, the folders made by that attempt are removed again (only empty folders this app just created); a job
+number already in use is flagged. Every job made is recorded in `created_projects.json` in the app's folder, and in
+the log.
+
+Drives, extra locations and the templates folder can also be edited under **Templates and locations** in the
+same panel. In paths, `{job}` is the job name; `{client_folder}`, `{client}`, `{job_no}`, `{title}`, `{yyyy}`,
+`{mm}` and `{dd}` also work. Creating the DaVinci Resolve project and the Frame.io project come next.
+
 ## Restoring locally
 
 If the cloud is unreachable: in Resolve switch to a local (Disk or PostgreSQL) database, right-click in the Project
@@ -232,9 +258,9 @@ Manager → *Import Project*, and pick the newest `.drp` from the project's back
 python3 -m unittest discover -s tests -v
 ```
 
-The 133 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
+The 148 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
 collaboration scenarios, backoff and alerts, `probe`, database switching, retention, caps, filters) plus the
-scheduler, the hidden-Resolve hand-over (with faked processes), the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, and the installer.
+scheduler, the hidden-Resolve hand-over (with faked processes), the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, the installer, and new project set-up (templates, previews, creating and rolling back folders, and its dashboard API).
 
 ## Not verified against real Resolve or macOS
 

@@ -194,14 +194,21 @@ class DashboardHtmlTests(unittest.TestCase):
         self.assertNotIn("innerHTML", self.html)
         self.assertNotIn("eval(", self.html)
 
-    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    JSC = "/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc"
+
+    @unittest.skipUnless(shutil.which("node") or Path(JSC).exists(), "no JavaScript engine installed")
     def test_inline_script_parses(self):
         js = re.findall(r"<script>(.*?)</script>", self.html, re.S)[-1]
         with tempfile.TemporaryDirectory() as d:
             f = Path(d) / "dash.js"
-            f.write_text(js)
-            r = subprocess.run(["node", "--check", str(f)], capture_output=True, text=True)
-            self.assertEqual(r.returncode, 0, r.stderr)
+            if shutil.which("node"):
+                f.write_text(js)
+                cmd = ["node", "--check", str(f)]
+            else:  # macOS's own engine: wrapped in a function that's never called, so it only parses
+                f.write_text("function __check() {" + js + "}")
+                cmd = [self.JSC, str(f)]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr or r.stdout)
 
 
 if __name__ == "__main__":

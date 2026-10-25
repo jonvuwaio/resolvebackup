@@ -57,8 +57,10 @@ import urllib.parse
 import webbrowser
 from pathlib import Path
 
+import project_setup
+
 APP = "resolve-cloud-backup"
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -131,6 +133,9 @@ DEFAULTS = {
     "resolve_script_lib": None,
     # Resolve's executable, for background_resolve. null = the standard install in /Applications.
     "resolve_app": None,
+    # New project set-up (dashboard > New project): folder templates, the workstation drives a job can go on,
+    # and extra locations that can also get folders. See project_setup.py for the format.
+    "project_setup": {"templates_dir": None, "drives": [], "extras": []},
 }
 
 RESERVED_WIN = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
@@ -818,7 +823,7 @@ class EventHandler(logging.Handler):
 EDITABLE = ("backup_dir", "interval_minutes", "retry_minutes", "active_hours", "off_hours_interval_minutes",
             "background_resolve", "rotate_libraries", "skip_libraries", "initial_lookback_days",
             "include", "exclude", "load_to_export", "save_open_project", "switch_database", "database",
-            "with_stills_and_luts", "max_exports_per_cycle", "min_free_gb", "retention")
+            "with_stills_and_luts", "max_exports_per_cycle", "min_free_gb", "retention", "project_setup")
 
 
 def validate_settings(inc: dict) -> tuple[dict, dict]:
@@ -908,6 +913,11 @@ def validate_settings(inc: dict) -> tuple[dict, dict]:
                                  "type": (d.get("type") or "").strip() or None}
         else:
             errs["database"] = "Invalid database settings."
+    if "project_setup" in inc:
+        sub, sub_errs = project_setup.validate_config(inc["project_setup"])
+        errs.update(sub_errs)
+        if not sub_errs:
+            clean["project_setup"] = sub
     for key in inc:
         if key not in EDITABLE:
             errs[key] = "This setting can only be changed in config.json."
@@ -917,9 +927,9 @@ def validate_settings(inc: dict) -> tuple[dict, dict]:
 _CHOOSE_FOLDER_SCRIPT = """
 on run argv
     activate
-    set msg to "Choose where Resolve Backup saves your backups"
-    if (count of argv) > 0 then
-        set f to choose folder with prompt msg default location (POSIX file (item 1 of argv))
+    set msg to item 1 of argv
+    if (count of argv) > 1 then
+        set f to choose folder with prompt msg default location (POSIX file (item 2 of argv))
     else
         set f to choose folder with prompt msg
     end if
@@ -927,20 +937,24 @@ on run argv
 end run
 """
 _choose_lock = threading.Lock()
+FOLDER_PROMPTS = {"backup": "Choose where Resolve Backup saves your backups",
+                  "templates": "Choose the folder that holds your folder templates",
+                  "projects": "Choose the folder new jobs go in on this drive"}
 
 
 def can_choose_folder() -> bool:
     return SYSTEM == "Darwin" and shutil.which("osascript") is not None
 
 
-def choose_folder(start: str | None = None, run=subprocess.run) -> dict:
+def choose_folder(start: str | None = None, run=subprocess.run,
+                  prompt: str = "Choose where Resolve Backup saves your backups") -> dict:
     """Show the macOS folder picker on this Mac. Returns {"path": ...}, {"cancelled": True} or {"error": ...}."""
     if not can_choose_folder():
         return {"error": "Choosing a folder this way only works on a Mac. Type the path instead."}
     if not _choose_lock.acquire(blocking=False):
         return {"error": "A folder window is already open. Look for it behind your other windows."}
     try:
-        args = ["osascript", "-e", _CHOOSE_FOLDER_SCRIPT]
+        args = ["osascript", "-e", _CHOOSE_FOLDER_SCRIPT, prompt]
         if start:
             p = Path(os.path.expanduser(start))
             while not p.is_dir() and p != p.parent:  # start at the nearest folder that exists
@@ -1472,6 +1486,9 @@ class Service:
             os.getpid(), pid, self.cfg_path, self.active_library.path, self.active_library.saved)))
         self.backup = Backup(self.cfg, self.dir / "state.json", connect=connect, clock=clock,
                              status=self.status, sleep=lambda s: self._stop.wait(s))
+        # reads config.json itself, so a drive added from the dashboard works at once, even mid-backup
+        self.setup = project_setup.ProjectSetup(lambda: load_config(self.cfg_path), self.dir,
+                                                known_names=lambda: self.backup.load_state()["projects"].keys())
         self.status.set(paused=False, state="starting")
         last = self.backup.load_state().get("last_cycle")
         if last:
@@ -1851,6 +1868,8 @@ def _make_handler(dash: DashboardServer):
                     self._send(200, dash.library_payload())
                 elif path == "/api/settings":
                     self._send(200, dash.settings_payload())
+                elif path == "/api/project-setup":
+                    self._send(200, {**dash.svc.setup.payload(), "can_choose_folder": can_choose_folder()})
                 elif path == "/favicon.ico":
                     self._send(204, b"", "image/x-icon")
                 else:
@@ -1892,7 +1911,22 @@ def _make_handler(dash: DashboardServer):
                     self._send(200, {"ok": svc.request_run_now(), "running": svc.status.get("state") == "running"})
                 elif path == "/api/choose-folder":
                     start = body.get("start")
-                    self._send(200, choose_folder(start if isinstance(start, str) else None))
+                    prompt = FOLDER_PROMPTS.get(body.get("purpose"), FOLDER_PROMPTS["backup"])
+                    self._send(200, choose_folder(start if isinstance(start, str) else None, prompt=prompt))
+                elif path == "/api/project-setup/preview":
+                    fields = body.get("fields") if isinstance(body.get("fields"), dict) else {}
+                    extras = body.get("extras")
+                    extras = {i for i in extras if isinstance(i, int)} if isinstance(extras, list) else None
+                    self._send(200, svc.setup.plan(fields, body.get("drive"), extras))
+                elif path == "/api/project-setup/create":
+                    fields = body.get("fields") if isinstance(body.get("fields"), dict) else {}
+                    r = svc.setup.create(fields, body.get("drive"), body.get("extras"))
+                    for res in r.get("results", []):
+                        if res["ok"]:
+                            log.info("New project %s: made %d folders in %s", r["job"], res["folders"], res["path"])
+                        else:
+                            log.warning("New project %s: nothing made in %s: %s", r["job"], res["path"], res["error"])
+                    self._send(200, r)
                 elif path == "/api/pause":
                     svc.set_paused(bool(body.get("paused", True)))
                     self._send(200, {"ok": True, "paused": svc.paused})

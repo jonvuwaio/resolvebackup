@@ -136,13 +136,14 @@ td small { display: block; color: var(--dim); }
 
 /* ---------- settings drawer ---------- */
 #scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .18s; }
-#drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100%); background: var(--panel); border-left: 1px solid var(--line); transform: translateX(100%); transition: transform .2s ease; display: flex; flex-direction: column; visibility: hidden; }
-body.open #scrim { opacity: 1; pointer-events: auto; }
-body.open #drawer { transform: none; visibility: visible; }
-@media (prefers-reduced-motion: reduce) { #drawer, #scrim { transition: none; } }
-#drawer header { padding: 20px 24px 12px; display: flex; justify-content: space-between; align-items: center; }
-#drawer h2 { margin: 0; font-size: 18px; font-weight: 600; }
-#drawer form { overflow: auto; padding: 0 24px 24px; flex: 1; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100%); background: var(--panel); border-left: 1px solid var(--line); transform: translateX(100%); transition: transform .2s ease; display: flex; flex-direction: column; visibility: hidden; }
+#newDrawer { width: min(620px, 100%); }
+body.open #scrim, body.open-new #scrim { opacity: 1; pointer-events: auto; }
+body.open #drawer, body.open-new #newDrawer { transform: none; visibility: visible; }
+@media (prefers-reduced-motion: reduce) { .drawer, #scrim { transition: none; } }
+.drawer header { padding: 20px 24px 12px; display: flex; justify-content: space-between; align-items: center; }
+.drawer h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.drawer form { overflow-y: auto; overflow-x: hidden; padding: 0 24px 24px; flex: 1; }
 .f { margin: 18px 0 0; }
 .f label, .f .lab { display: block; font-weight: 500; margin-bottom: 4px; }
 .f input[type=text], .f input[type=number], .f input[type=time], .f select, .f textarea { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 7px 10px; }
@@ -155,9 +156,37 @@ body.open #drawer { transform: none; visibility: visible; }
 .f .row > span { flex: none; color: var(--dim); }
 .f .num-row > input[type=number] { flex: none; width: 7.5em; }
 .check { display: flex; gap: 8px; align-items: center; font-weight: 500; }
-#drawer footer { padding: 14px 24px; border-top: 1px solid var(--line); display: flex; gap: 12px; align-items: center; }
-#saveMsg { color: var(--dim); flex: 1; }
-#saveMsg.ok { color: var(--ok); } #saveMsg.bad { color: var(--bad); }
+.drawer footer { padding: 14px 24px; border-top: 1px solid var(--line); display: flex; gap: 12px; align-items: center; }
+.msg-line { color: var(--dim); flex: 1; min-width: 0; }
+.msg-line.ok { color: var(--ok); } .msg-line.bad { color: var(--bad); }
+
+/* ---------- new project ---------- */
+.jobname { margin: 22px 0 0; font-size: 20px; font-weight: 500; overflow-wrap: anywhere; min-height: 1.5em; }
+.jobname.empty { color: var(--faint); }
+.warns { margin: 6px 0 0; padding: 0; list-style: none; color: var(--wait); font-size: 13px; }
+.where { margin: 8px 0 0; padding: 0; list-style: none; }
+.where li { padding: 8px 0; border-top: 1px solid var(--line-soft); min-width: 0; }
+.where li:first-child { border-top: 0; }
+.where .name, .where .check { display: flex; }
+.where .path { display: block; color: var(--dim); font-size: 12.5px; overflow-wrap: anywhere; }
+.where .chip { font-size: 12.5px; margin-top: 2px; }
+.chip.ready i { background: var(--ok); } .chip.waiting i { background: var(--faint); } .chip.exists i, .chip.drive_missing i, .chip.template_missing i, .chip.not_writable i { background: var(--wait); }
+.chip.exists, .chip.drive_missing, .chip.template_missing, .chip.not_writable { color: var(--wait); }
+.tree { margin: 6px 0 0; padding: 8px 12px; background: var(--bg); border: 1px solid var(--line-soft); border-radius: 4px; font-size: 12.5px; color: var(--dim); max-height: 260px; overflow: auto; white-space: pre; }
+details summary { cursor: pointer; color: var(--dim); }
+details[open] > summary { margin-bottom: 4px; }
+.box { margin: 10px 0 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
+.box .f:first-child { margin-top: 0; }
+.ed-row { padding: 12px 0; border-top: 1px solid var(--line-soft); }
+.ed-row:first-of-type { border-top: 0; }
+.ed-row .row + .row { margin-top: 8px; }
+.ed-row input[type=text], .ed-row select { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 6px 9px; }
+.results { margin: 18px 0 0; padding: 0; list-style: none; }
+.results li { padding: 8px 0 8px 18px; border-top: 1px solid var(--line-soft); position: relative; overflow-wrap: anywhere; }
+.results li::before { content: ""; position: absolute; left: 0; top: 15px; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.results li.bad::before { background: var(--bad); }
+.results small { display: block; color: var(--dim); }
+.soon { margin: 22px 0 0; color: var(--faint); font-size: 12.5px; }
 
 @media (max-width: 900px) {
   .wrap { padding: 20px 16px 40px; }
@@ -181,6 +210,7 @@ body.open #drawer { transform: none; visibility: visible; }
       <p class="sub" id="sub"></p>
     </div>
     <div class="actions">
+      <button class="btn" id="openNew">New project</button>
       <button class="btn primary" id="runNow">Back up now</button>
       <button class="btn" id="pause">Pause</button>
       <button class="btn" id="openSettings">Settings</button>
@@ -229,7 +259,7 @@ body.open #drawer { transform: none; visibility: visible; }
 
   <section class="lib" aria-labelledby="dbH" id="dbSection" hidden>
     <div class="lib-head"><h2 id="dbH">Libraries</h2></div>
-    <p class="hint" style="margin:0 0 10px;color:var(--dim)">Every library your Blackmagic Cloud account can see. Resolve only lets this app back up the library that's open, so open the others in Resolve's Project Manager now and then to back them up.</p>
+    <p class="hint" style="margin:0 0 10px;color:var(--dim)">Every library your Blackmagic Cloud account can see. While Resolve is closed, the hidden checks open each one in turn. Otherwise only the library open in Resolve is backed up.</p>
     <div class="scroll"><table id="dbTbl">
       <thead><tr><th>Library</th><th class="r">Projects</th><th>Last checked</th><th>Status</th></tr></thead>
       <tbody id="dbRows"></tbody>
@@ -265,7 +295,7 @@ body.open #drawer { transform: none; visibility: visible; }
 
 <div id="tip" hidden></div>
 <div id="scrim"></div>
-<aside id="drawer" role="dialog" aria-modal="true" aria-labelledby="setH" aria-hidden="true">
+<aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="setH" aria-hidden="true">
   <header><h2 id="setH">Settings</h2><button class="btn" id="closeSettings">Close</button></header>
   <form id="form" autocomplete="off">
     <div class="f"><label for="backup_dir">Backup folder</label>
@@ -319,7 +349,65 @@ body.open #drawer { transform: none; visibility: visible; }
       <div class="err" data-err="database"></div></div>
     <p class="hint" id="cfgPath" style="margin-top:22px"></p>
   </form>
-  <footer><span id="saveMsg" role="status"></span><button class="btn primary" id="save" disabled>Save settings</button></footer>
+  <footer><span id="saveMsg" class="msg-line" role="status"></span><button class="btn primary" id="save" disabled>Save settings</button></footer>
+</aside>
+
+<aside id="newDrawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="newH" aria-hidden="true">
+  <header><h2 id="newH">New project</h2><button class="btn" id="closeNew">Close</button></header>
+  <form id="npForm" autocomplete="off">
+    <p class="banner" id="npProblem" hidden></p>
+    <div class="f"><label for="npDrive">Project drive</label>
+      <select id="npDrive"></select>
+      <div class="hint">The RAID of the workstation the job is on.</div>
+      <div class="err" data-nperr="drive"></div>
+      <div class="box" id="addDrive" hidden>
+        <div class="f"><label for="adVol">Drive</label><select id="adVol"></select>
+          <div class="hint" id="adVolHint"></div></div>
+        <div class="f"><label for="adLayout">Jobs go in</label>
+          <select id="adLayout">
+            <option value="{client_folder}/{job}">Projects / Client / Job</option>
+            <option value="{job}">Projects / Job</option>
+          </select></div>
+        <div class="f"><label for="adTemplate">Folder template</label><select id="adTemplate"></select></div>
+        <div class="f"><label for="adPath">Full path</label><input type="text" id="adPath" spellcheck="false">
+          <div class="err" data-aderr="path"></div><div class="err" data-aderr="name"></div><div class="err" data-aderr="template"></div></div>
+        <div class="row" style="margin-top:12px;display:flex;gap:8px"><button type="button" class="btn primary" id="adSave">Add drive</button><button type="button" class="btn" id="adCancel">Cancel</button><span class="msg-line" id="adMsg"></span></div>
+      </div></div>
+    <div class="f"><label for="npJobNo">Job number</label>
+      <div class="row num-row"><input type="text" id="npJobNo" spellcheck="false" style="flex:none;width:9em"><span id="npJobNoHint"></span></div>
+      <div class="err" data-nperr="job_no"></div></div>
+    <div class="f"><label for="npClientFolder">Client folder</label>
+      <input type="text" id="npClientFolder" list="npClients" spellcheck="false"><datalist id="npClients"></datalist>
+      <div class="hint">Pick an existing client or type a new one.</div>
+      <div class="err" data-nperr="client_folder"></div></div>
+    <div class="f"><label for="npClient">Client in the job name</label>
+      <input type="text" id="npClient" spellcheck="false">
+      <div class="hint" id="npClientHint">Usually the same as the folder.</div>
+      <div class="err" data-nperr="client"></div></div>
+    <div class="f"><label for="npTitle">Job title</label>
+      <input type="text" id="npTitle" spellcheck="false" placeholder="For example Plusnet_Plusso">
+      <div class="err" data-nperr="title"></div></div>
+    <p class="jobname empty" id="npJob">Job name appears here</p>
+    <ul class="warns" id="npWarn"></ul>
+    <div class="f"><span class="lab">Folders made</span><ul class="where" id="npWhere"></ul></div>
+    <p class="soon">DaVinci Resolve and Frame.io set-up come next.</p>
+    <ul class="results" id="npResults" hidden></ul>
+    <details style="margin-top:28px" id="npEdit">
+      <summary>Templates and locations</summary>
+      <div class="f"><label for="edTemplates">Folder templates</label>
+        <div class="row"><input type="text" id="edTemplates" spellcheck="false"><button type="button" class="btn" id="edChooseTemplates" hidden>Choose…</button></div>
+        <div class="hint">Each folder in here is a template. Change a template there and new jobs follow it.</div>
+        <div class="err" data-ederr="project_setup.templates_dir"></div></div>
+      <div class="f"><span class="lab">Project drives</span><div id="edDrives"></div></div>
+      <div class="f"><span class="lab">Also offer</span>
+        <div class="hint">Other places a job can get folders, for example deliverables. Tick them per job.</div>
+        <div id="edExtras"></div>
+        <button type="button" class="btn" id="edAddExtra" style="margin-top:8px">Add a location</button></div>
+      <div class="hint" style="margin-top:14px">In paths, {job} is the job name. You can also use {client_folder}, {client}, {job_no}, {title}, {yyyy}, {mm} and {dd}.</div>
+      <div class="row" style="margin-top:14px;display:flex;gap:12px;align-items:center"><button type="button" class="btn primary" id="edSave" disabled>Save locations</button><span class="msg-line" id="edMsg"></span></div>
+    </details>
+  </form>
+  <footer><span id="npMsg" class="msg-line" role="status"></span><button class="btn primary" id="npCreate" disabled>Create folders</button></footer>
 </aside>
 
 <script>
@@ -714,11 +802,266 @@ body.open #drawer { transform: none; visibility: visible; }
     }
   });
 
+  // ---------- new project ----------
+  const ADD = "__add__";
+  const NP = { data: null, drive: null, extras: null, clientTouched: false, touched: new Set(), showAll: false,
+               timer: null, seq: 0, plan: null, busy: false, done: false, editInitial: null, opener: null };
+  const STATUS_WORD = { ready: "Ready", waiting: "Waiting for the job details", exists: "Already exists",
+                        drive_missing: "Drive not connected", template_missing: "Template missing", not_writable: "Can't write here" };
+  const npFields = () => ({ job_no: $("npJobNo").value.trim(), client_folder: $("npClientFolder").value.trim(),
+                            client: $("npClient").value.trim(), title: $("npTitle").value.trim() });
+  const treeText = (paths) => paths.slice().sort().map((x) => { const parts = x.split("/"); return "    ".repeat(parts.length - 1) + parts[parts.length - 1]; }).join("\n");
+
+  async function loadSetup() {
+    const d = await api("/api/project-setup"); NP.data = d;
+    const c = d.config, sel = $("npDrive");
+    const keep = NP.drive != null && c.drives[NP.drive] ? c.drives[NP.drive].name : d.last_drive;
+    sel.replaceChildren(...c.drives.map((x, i) => h("option", { value: String(i) }, x.name)), h("option", { value: ADD }, "Add a drive…"));
+    let idx = c.drives.findIndex((x) => x.name === keep);
+    if (idx < 0) idx = c.drives.length ? 0 : null;
+    NP.drive = idx; sel.value = idx == null ? ADD : String(idx);
+    if (idx == null) openAddDrive(); else $("addDrive").hidden = true;
+    $("npClients").replaceChildren(...d.clients.map((x) => h("option", { value: x.folder })));
+    if (!$("npJobNo").value && d.next_job_no) $("npJobNo").value = d.next_job_no;
+    $("npJobNoHint").textContent = d.next_job_no ? `Next free number is ${d.next_job_no}` : "";
+    $("npProblem").hidden = !d.templates_problem; $("npProblem").textContent = d.templates_problem || "";
+    $("edChooseTemplates").hidden = !d.can_choose_folder;
+    if (NP.editInitial == null || JSON.stringify(collectEditor()) === NP.editInitial) {  // don't clobber unsaved edits
+      renderEditor(c); NP.editInitial = JSON.stringify(collectEditor()); $("edSave").disabled = true;
+    }
+  }
+
+  function schedulePreview() { clearTimeout(NP.timer); NP.timer = setTimeout(preview, 250); }
+  async function preview() {
+    const seq = ++NP.seq;
+    try {
+      const p = await api("/api/project-setup/preview", { fields: npFields(), drive: NP.drive, extras: NP.extras });
+      if (seq !== NP.seq) return;
+      NP.plan = p; renderPlan();
+    } catch (e) { $("npMsg").className = "msg-line bad"; $("npMsg").textContent = "Couldn't reach the backup service."; }
+  }
+  function renderPlan() {
+    const p = NP.plan; if (!p) return;
+    for (const e of document.querySelectorAll("[data-nperr]")) { const k = e.dataset.nperr; e.textContent = (NP.showAll || NP.touched.has(k)) ? (p.errors[k] || "") : ""; }
+    const ok = !Object.keys(p.errors).length;
+    $("npJob").textContent = p.job || "Job name appears here"; $("npJob").classList.toggle("empty", !ok);
+    $("npWarn").replaceChildren(...p.warnings.map((w) => h("li", {}, w)));
+    const tpl = (NP.data && NP.data.templates) || {};
+    $("npWhere").replaceChildren(...p.locations.map((r) => {
+      const st = !r.on ? "Not this time" : r.status === "ready" ? (r.folders ? `Ready, ${plural(r.folders, "folder")}` : "Ready") : (r.message || STATUS_WORD[r.status]);
+      const head = r.kind === "drive" ? h("span", { class: "name" }, r.name)
+        : h("label", { class: "check" }, h("input", { type: "checkbox", "data-extra": String(r.index), checked: r.on }), r.name);
+      const tree = tpl[r.template];
+      return h("li", {}, head, r.path ? h("span", { class: "path" }, r.path) : null,
+        h("span", { class: "chip " + (r.on ? r.status : "waiting") }, h("i"), st),
+        tree && tree.length ? h("details", {}, h("summary", {}, `${r.template} template`), h("div", { class: "tree" }, treeText(tree))) : null);
+    }));
+    if (!p.locations.length) $("npWhere").append(h("li", { class: "none" }, "Add a project drive to start."));
+    if (!NP.done) $("npCreate").disabled = !p.can_create || NP.busy;
+  }
+
+  function clearDone() {
+    if (!NP.done) return;
+    NP.done = false; $("npResults").hidden = true; $("npCreate").textContent = "Create folders"; $("npMsg").textContent = "";
+  }
+  function npInput(ev) {
+    const id = ev.target.id;
+    if (id === "npTitle") { const v = ev.target.value, n = v.replace(/\s+/g, "_"); if (n !== v) ev.target.value = n; }
+    if (id === "npClient") NP.clientTouched = !!ev.target.value.trim();
+    if (id === "npClientFolder") {
+      const f = ev.target.value.trim(), c = NP.data && NP.data.clients.find((x) => x.folder === f);
+      if (!NP.clientTouched) $("npClient").value = c && c.client ? c.client : f.replace(/[^A-Za-z0-9-]/g, "");
+      $("npClientHint").textContent = c && c.last_job ? `Last job: ${c.last_job}` : "Usually the same as the folder.";
+    }
+    if (["npJobNo", "npClientFolder", "npClient", "npTitle"].includes(id)) { clearDone(); schedulePreview(); }
+  }
+  $("npForm").addEventListener("input", npInput);
+  $("npForm").addEventListener("submit", (ev) => ev.preventDefault());
+  $("npForm").addEventListener("focusout", (ev) => {
+    const k = { npJobNo: "job_no", npClientFolder: "client_folder", npClient: "client", npTitle: "title" }[ev.target.id];
+    if (k && ev.target.value.trim()) { NP.touched.add(k); renderPlan(); }
+  });
+  $("npWhere").addEventListener("change", (ev) => {
+    if (!ev.target.dataset.extra) return;
+    NP.extras = [...document.querySelectorAll("#npWhere [data-extra]:checked")].map((x) => Number(x.dataset.extra));
+    clearDone(); schedulePreview();
+  });
+  $("npDrive").addEventListener("change", (ev) => {
+    if (ev.target.value === ADD) { openAddDrive(); return; }
+    NP.drive = Number(ev.target.value); $("addDrive").hidden = true; clearDone(); schedulePreview();
+  });
+
+  // add a drive
+  function openAddDrive() {
+    const d = NP.data; if (!d) return;
+    $("addDrive").hidden = false; $("adMsg").textContent = "";
+    for (const e of document.querySelectorAll("[data-aderr]")) e.textContent = "";
+    const vols = d.volumes.slice().sort((a, b) => (b.has_projects - a.has_projects) || a.name.localeCompare(b.name));
+    $("adVol").replaceChildren(...vols.map((v) => h("option", { value: v.path, "data-name": v.name, "data-projects": v.has_projects ? "1" : "" }, v.name)),
+      h("option", { value: "" }, "Somewhere else…"));
+    const t = Object.keys(d.templates);
+    $("adTemplate").replaceChildren(...t.map((x) => h("option", { value: x }, x)));
+    if (t.includes("Project")) $("adTemplate").value = "Project";
+    $("adLayout").value = "{client_folder}/{job}";
+    adSync();
+  }
+  function adSync() {
+    const o = $("adVol").selectedOptions[0];
+    if (o && o.value) {
+      $("adPath").value = `${o.value}/Projects/${$("adLayout").value}`;
+      $("adVolHint").textContent = o.dataset.projects ? "" : "This drive has no Projects folder yet. It's made with the first job.";
+    } else { $("adPath").value = "/Volumes/"; $("adVolHint").textContent = "Type the full path below."; }
+  }
+  $("adVol").addEventListener("change", adSync);
+  $("adLayout").addEventListener("change", adSync);
+  $("adCancel").addEventListener("click", () => {
+    $("addDrive").hidden = true;
+    if (NP.drive != null) $("npDrive").value = String(NP.drive);
+  });
+  $("adSave").addEventListener("click", async () => {
+    const o = $("adVol").selectedOptions[0], path = $("adPath").value.trim();
+    const name = o && o.value ? o.dataset.name : (path.split("/").filter(Boolean)[1] || "");
+    const drives = NP.data.config.drives.concat([{ name, template: $("adTemplate").value, path }]);
+    if (await saveSetup({ drives }, $("adMsg"), "aderr", `project_setup.drives.${drives.length - 1}.`)) {
+      NP.drive = drives.length - 1; NP.editInitial = null;
+      await loadSetup(); clearDone(); schedulePreview();
+    }
+  });
+
+  async function saveSetup(sub, msgEl, attr, prefix) {
+    for (const e of document.querySelectorAll(`[data-${attr}]`)) e.textContent = "";
+    msgEl.className = "msg-line"; msgEl.textContent = "Saving";
+    try {
+      await api("/api/settings", { project_setup: sub });
+      msgEl.className = "msg-line ok"; msgEl.textContent = "Saved."; return true;
+    } catch (e) {
+      const errs = (e.data && e.data.errors) || {}; let shown = 0;
+      for (const [k, v] of Object.entries(errs)) {
+        const key = prefix && k.startsWith(prefix) ? k.slice(prefix.length) : k;
+        const t = document.querySelector(`[data-${attr}="${CSS.escape(key)}"]`);
+        if (t) { t.textContent = v; shown++; }
+      }
+      msgEl.className = "msg-line bad";
+      msgEl.textContent = shown ? "Not saved. Check the highlighted fields." : `Not saved. ${Object.values(errs)[0] || "The service didn't answer."}`;
+      return false;
+    }
+  }
+
+  // templates and locations editor
+  function edRow(kind, x, i) {
+    const tpls = Object.keys((NP.data && NP.data.templates) || {});
+    if (x.template && !tpls.includes(x.template)) tpls.push(x.template);
+    const pre = `project_setup.${kind}.${i}.`;
+    return h("div", { class: "ed-row" },
+      h("div", { class: "row" },
+        h("input", { type: "text", "data-k": "name", value: x.name || "", "aria-label": "Name", placeholder: "Name" }),
+        h("select", { "data-k": "template", "aria-label": "Template" }, ...tpls.map((t) => h("option", { value: t, selected: t === x.template }, t))),
+        kind === "extras" ? h("label", { class: "check", style: "flex:none;font-weight:400" }, h("input", { type: "checkbox", "data-k": "default_on", checked: !!x.default_on }), "Ticked") : null,
+        h("button", { type: "button", class: "btn", "data-remove": kind + ":" + i }, "Remove")),
+      h("div", { class: "row" }, h("input", { type: "text", "data-k": "path", value: x.path || "", spellcheck: "false", "aria-label": "Path" })),
+      ...["name", "template", "path", "default_on"].map((k) => h("div", { class: "err", "data-ederr": pre + k })));
+  }
+  function renderEditor(c) {
+    $("edTemplates").value = c.templates_dir || "";
+    $("edDrives").replaceChildren(...c.drives.map((x, i) => edRow("drives", x, i)));
+    if (!c.drives.length) $("edDrives").append(h("div", { class: "hint" }, "None yet. Use Add a drive… in the Project drive list."));
+    $("edExtras").replaceChildren(...c.extras.map((x, i) => edRow("extras", x, i)));
+  }
+  function collectEditor() {
+    const rows = (id) => [...document.querySelectorAll(`#${id} .ed-row`)].map((r) => {
+      const o = {}; for (const el of r.querySelectorAll("[data-k]")) o[el.dataset.k] = el.type === "checkbox" ? el.checked : el.value.trim();
+      return o;
+    });
+    return { templates_dir: $("edTemplates").value.trim() || null, drives: rows("edDrives"), extras: rows("edExtras") };
+  }
+  const edDirty = () => { $("edSave").disabled = JSON.stringify(collectEditor()) === NP.editInitial; };
+  $("npEdit").addEventListener("input", edDirty);
+  $("npEdit").addEventListener("change", edDirty);
+  $("npEdit").addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-remove]"); if (!b) return;
+    const [kind, i] = b.dataset.remove.split(":"), cur = collectEditor();
+    cur[kind].splice(Number(i), 1); renderEditor(cur); edDirty();
+  });
+  $("edAddExtra").addEventListener("click", () => {
+    const cur = collectEditor(), t = Object.keys((NP.data && NP.data.templates) || {});
+    cur.extras.push({ name: "", template: t[0] || "", path: "/Volumes/", default_on: false });
+    renderEditor(cur); edDirty();
+    const rows = $("edExtras").querySelectorAll(".ed-row"); rows[rows.length - 1].querySelector("input").focus();
+  });
+  $("edChooseTemplates").addEventListener("click", async () => {
+    const b = $("edChooseTemplates"), err = document.querySelector('[data-ederr="project_setup.templates_dir"]');
+    b.disabled = true; err.textContent = "";
+    try {
+      const r = await api("/api/choose-folder", { start: $("edTemplates").value.trim() || "/Volumes", purpose: "templates" });
+      if (r.path) { $("edTemplates").value = r.path; edDirty(); } else if (r.error) err.textContent = r.error;
+    } catch (e) { err.textContent = "Couldn't open the folder window."; }
+    b.disabled = false;
+  });
+  $("edSave").addEventListener("click", async () => {
+    const cur = collectEditor();
+    if (await saveSetup(cur, $("edMsg"), "ederr", "")) {
+      NP.editInitial = null; NP.extras = null;
+      if (NP.drive != null && NP.drive >= cur.drives.length) NP.drive = null;
+      await loadSetup(); clearDone(); schedulePreview();
+    }
+  });
+
+  // create
+  $("npCreate").addEventListener("click", async () => {
+    const msg = $("npMsg");
+    if (NP.done) {  // start another
+      for (const id of ["npJobNo", "npClientFolder", "npClient", "npTitle"]) $(id).value = "";
+      NP.clientTouched = false; NP.touched.clear(); NP.showAll = false; NP.extras = null; clearDone();
+      await loadSetup(); preview(); $("npClientFolder").focus(); return;
+    }
+    NP.showAll = true; renderPlan();
+    if (!NP.plan || !NP.plan.can_create) return;
+    NP.busy = true; $("npCreate").disabled = true; msg.className = "msg-line"; msg.textContent = "Creating folders";
+    const extras = NP.plan.locations.filter((x) => x.kind === "extra" && x.on).map((x) => x.index);
+    try {
+      const r = await api("/api/project-setup/create", { fields: npFields(), drive: NP.drive, extras });
+      if (r.results) {
+        $("npResults").replaceChildren(...r.results.map((x) => h("li", { class: x.ok ? "" : "bad" },
+          x.ok ? `${x.name}: made ${plural(x.folders, "folder")}` : `${x.name}: nothing made`,
+          h("small", {}, x.ok ? x.path : (x.error || "")))));
+        $("npResults").hidden = false; NP.done = true;
+        msg.className = "msg-line " + (r.ok ? "ok" : "bad");
+        msg.textContent = r.ok ? `${r.job} is set up.` : "Some folders weren't made. See below.";
+        $("npCreate").textContent = "Start another";
+        $("npResults").scrollIntoView({ block: "nearest" });
+      } else { msg.className = "msg-line bad"; msg.textContent = r.error || "Nothing was created."; }
+    } catch (e) { msg.className = "msg-line bad"; msg.textContent = "Couldn't reach the backup service. Nothing was created."; }
+    NP.busy = false;
+    if (NP.done) $("npCreate").disabled = false; else preview();
+  });
+
+  // open / close
+  async function openNew() {
+    if (document.body.classList.contains("open")) closeSettings();
+    NP.opener = document.activeElement;
+    try { await loadSetup(); } catch (e) { return; }
+    document.body.classList.add("open-new"); $("newDrawer").setAttribute("aria-hidden", "false");
+    preview();
+    (NP.drive == null ? $("adVol") : $("npClientFolder")).focus();
+    if (location.hash !== "#new") history.replaceState(null, "", location.pathname + location.search + "#new");
+  }
+  function closeNew() {
+    document.body.classList.remove("open-new"); $("newDrawer").setAttribute("aria-hidden", "true");
+    history.replaceState(null, "", location.pathname + location.search);
+    if (NP.opener) NP.opener.focus();
+  }
+  $("openNew").addEventListener("click", openNew);
+  $("closeNew").addEventListener("click", closeNew);
+  $("scrim").addEventListener("click", () => { if (document.body.classList.contains("open-new")) closeNew(); });
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && document.body.classList.contains("open-new")) closeNew(); });
+  addEventListener("hashchange", () => { if (location.hash === "#new") openNew(); });
+
   // ---------- go ----------
   renderTimeline(); renderRows(); renderFeed();
   setInterval(() => { renderNow(); tickClock(); }, 1000);
   setInterval(renderTimeline, 15000);
   pollStatus(); pollLibrary(true);
+  if (location.hash === "#new") openNew();
 })();
 </script>
 </body>

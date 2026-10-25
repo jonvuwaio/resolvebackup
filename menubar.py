@@ -354,6 +354,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
             self.m_title = rumps.MenuItem("Starting")
             self.m_detail = rumps.MenuItem("")
             self.m_dash = rumps.MenuItem("Open dashboard", callback=self.open_dashboard)
+            self.m_new = rumps.MenuItem("New project…", callback=self.new_project)
             self.m_run = rumps.MenuItem("Back up now", callback=self.run_now)
             self.m_pause = rumps.MenuItem("Pause backups", callback=self.toggle_pause)
             self.m_start = rumps.MenuItem("Start backup service", callback=self.start)
@@ -363,7 +364,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
             self.m_log = rumps.MenuItem("Open log", callback=self.open_log)
             self.m_quit = rumps.MenuItem("Quit Resolve Backup" if embedded else "Quit menu bar icon",
                                          callback=self.quit)
-            top = [self.m_title, self.m_detail, None, self.m_dash, self.m_run, self.m_pause]
+            top = [self.m_title, self.m_detail, None, self.m_new, self.m_dash, self.m_run, self.m_pause]
             if not embedded:
                 top.append(self.m_start)
             self.menu = top + [None, self.m_folder, self.m_log] + ([self.m_login] if embedded else []) + [None, self.m_quit]
@@ -397,6 +398,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
                 self.m_pause.title = "Resume backups" if s["paused"] else "Pause backups"
                 self.m_start.set_callback(self.start if s["key"] in ("off", "denied") else None)
                 self.m_dash.set_callback(self.open_dashboard if s["key"] not in ("off", "denied") else None)
+                self.m_new.set_callback(self.new_project if s["key"] not in ("off", "denied") else None)
             msg = alerts.check(s)
             if msg:
                 notify("Resolve Backup", msg)
@@ -423,6 +425,11 @@ def run_app(runner=None, first_run: bool = False) -> int:
             url = client.dashboard_url()
             if url:
                 webbrowser.open(url)
+
+        def new_project(self, _):
+            url = client.dashboard_url()
+            if url:
+                webbrowser.open(url + "#new")
 
         def run_now(self, _):
             try:

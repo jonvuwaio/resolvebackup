@@ -371,7 +371,7 @@ class DashboardTests(LiveBase):
 
     def test_choose_folder_endpoint(self):
         seen = []
-        with mock.patch.object(rcb, "choose_folder", lambda start: seen.append(start) or {"path": "/Volumes/B"}):
+        with mock.patch.object(rcb, "choose_folder", lambda start, prompt=None: seen.append(start) or {"path": "/Volumes/B"}):
             code, r = self.req("POST", "/api/choose-folder", self.AUTH, {"start": "/Volumes"})
             self.assertEqual((code, r, seen), (200, {"path": "/Volumes/B"}, ["/Volumes"]))
             code, _ = self.req("POST", "/api/choose-folder", {}, {})
