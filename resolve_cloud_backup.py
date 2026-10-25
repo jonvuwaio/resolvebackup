@@ -60,7 +60,7 @@ from pathlib import Path
 import project_setup
 
 APP = "resolve-cloud-backup"
-VERSION = "1.10.0"
+VERSION = "1.11.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -2056,14 +2056,10 @@ def _make_handler(dash: DashboardServer):
                     self._send(200, choose_folder(start if isinstance(start, str) else None, prompt=prompt))
                 elif path == "/api/project-setup/preview":
                     fields = body.get("fields") if isinstance(body.get("fields"), dict) else {}
-                    extras = body.get("extras")
-                    extras = {i for i in extras if isinstance(i, int)} if isinstance(extras, list) else None
-                    resolve = body.get("resolve") if isinstance(body.get("resolve"), bool) else None
-                    self._send(200, svc.setup.plan(fields, body.get("drive"), extras, resolve))
+                    self._send(200, svc.setup.plan(fields, body.get("drive")))
                 elif path == "/api/project-setup/create":
                     fields = body.get("fields") if isinstance(body.get("fields"), dict) else {}
-                    resolve = body.get("resolve") if isinstance(body.get("resolve"), bool) else None
-                    r = svc.setup.create(fields, body.get("drive"), body.get("extras"), resolve)
+                    r = svc.setup.create(fields, body.get("drive"))
                     for res in r.get("results", []):
                         if res["ok"]:
                             log.info("New project %s: made %d folders in %s", r["job"], res["folders"], res["path"])

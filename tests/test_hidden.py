@@ -494,7 +494,7 @@ class NewProjectServiceTests(LibraryRig):
         plan = svc.setup.plan(self.FIELDS)
         self.assertEqual([r["kind"] for r in plan["locations"]], ["resolve"])
         self.assertEqual(plan["locations"][0]["path"], "WashOrgSrvrDB_1 / WSMLondon/WC105_WSM_Varley / WC105_WSM_Varley_CV1")
-        r = svc.setup.create(self.FIELDS, None, [])
+        r = svc.setup.create(self.FIELDS)
         self.assertEqual(r["resolve"]["state"], "queued")
         self.assertTrue(svc.setup.has_pending())
         svc.tick()
@@ -510,7 +510,7 @@ class NewProjectServiceTests(LibraryRig):
         self.fs.procs[42] = GUI
         self.pm.db = {"DbType": "PostgreSQL", "DbName": dbname(B)}
         svc = self.service(connect=lambda c: FakeResolve(self.pm))
-        rid = svc.setup.create(self.FIELDS, None, [])["id"]
+        rid = svc.setup.create(self.FIELDS)["id"]
         svc.tick()
         rec = svc.setup.recent(1)[0]["resolve"]
         self.assertEqual(rec["state"], "failed")
@@ -526,7 +526,7 @@ class NewProjectServiceTests(LibraryRig):
 
     def test_unfinished_jobs_are_offered_for_retry_after_a_restart(self):
         svc = self.service()
-        svc.setup.create(self.FIELDS, None, [])
+        svc.setup.create(self.FIELDS)
         again = self.service()
         rec = again.setup.recent(1)[0]["resolve"]
         self.assertEqual(rec["state"], "failed")

@@ -1,13 +1,13 @@
 """New project set-up: make a job's folder structure on the chosen drives, copied from template folders.
 
 Each folder inside `templates_dir` is a template (for example FolderStructures/Project). A job goes on one
-project drive (each workstation has its own RAID, picked from a list) plus any extra locations that are ticked.
-Each says which template to copy where, with the job's details filled into its path:
+project drive (each workstation has its own RAID, picked from a list) and also on every extra location (for example
+the deliverables drive). Each says which template to copy where, with the job's details filled into its path:
 
     "drives": [{"name": "Colour-3-Raid", "template": "Project",
                 "path": "/Volumes/Colour-3-Raid/Projects/{client_folder}/{job}"}],
     "extras": [{"name": "Deliverables", "template": "Deliverables",
-                "path": "/Volumes/WashDeliverables/Deliverables/Projects/{job}", "default_on": false}]
+                "path": "/Volumes/WashDeliverables/Deliverables/Projects/{job}"}]
 
 Placeholders: {job} (WC105_Client_Title), {job_no}, {client}, {client_folder}, {title}, {yyyy}, {mm}, {dd}.
 They also work in template folder names.
@@ -93,7 +93,7 @@ def validate_fields(fields: dict) -> dict:
     return errs
 
 
-def _validate_places(locs, key: str, errs: dict, extras: bool) -> list:
+def _validate_places(locs, key: str, errs: dict) -> list:
     if not isinstance(locs, list) or len(locs) > MAX_LOCATIONS:
         errs[key] = f"Add up to {MAX_LOCATIONS}."
         return []
@@ -125,14 +125,8 @@ def _validate_places(locs, key: str, errs: dict, extras: bool) -> list:
                 errs[k + ".path"] = "Unknown: " + ", ".join("{" + u + "}" for u in unknown) + "."
             elif any(seg in ("..", ".") for seg in p.split("/")):
                 errs[k + ".path"] = "The path can't contain . or .. folders."
-        clean = {}
-        if extras:
-            default_on = loc.get("default_on", False)
-            if not isinstance(default_on, bool):
-                errs[k + ".default_on"] = "Choose on or off."
-            clean["default_on"] = default_on
         if not any(e == k or e.startswith(k + ".") for e in errs):
-            out.append({"name": name.strip(), "template": tpl.strip(), "path": path.strip().rstrip("/"), **clean})
+            out.append({"name": name.strip(), "template": tpl.strip(), "path": path.strip().rstrip("/")})
     return out
 
 
@@ -185,7 +179,7 @@ def validate_config(inc) -> tuple[dict, dict]:
             clean["templates_dir"] = os.path.expanduser(t.strip()).rstrip("/") or "/"
     for key in ("drives", "extras"):
         if key in inc:
-            clean[key] = _validate_places(inc[key], f"project_setup.{key}", errs, key == "extras")
+            clean[key] = _validate_places(inc[key], f"project_setup.{key}", errs)
     if "resolve" in inc:
         clean["resolve"] = _validate_resolve(inc["resolve"], errs)
     for k in inc:
@@ -398,11 +392,10 @@ class ProjectSetup:
             return []
 
     # ---- preview
-    def plan(self, fields: dict, drive=None, extras=None, resolve=None) -> dict:
-        """What Create would do, without touching anything.
-
-        drive: index into drives (None = the most recently used, else the first). extras: indexes of the extra
-        locations to include (None = the ones on by default). resolve: make the Resolve project (None = if set up).
+    def plan(self, fields: dict, drive=None) -> dict:
+        """What Create would do, without touching anything. Every job gets all of it: its folders on the chosen
+        project drive (drive: index into drives; None = the most recently used, else the first) and on every extra
+        location, and its Resolve project if that's set up.
         """
         c = self.cfg()
         errs = validate_fields(fields)
@@ -427,7 +420,7 @@ class ProjectSetup:
         if drive is not None:
             rows.append(("drive", drive, c["drives"][drive], True))
         for i, loc in enumerate(c["extras"]):
-            rows.append(("extra", i, loc, bool(loc.get("default_on")) if extras is None else i in extras))
+            rows.append(("extra", i, loc, True))
         locs = []
         for kind, i, loc, on in rows:
             row = {"kind": kind, "index": i, "name": loc.get("name"), "template": loc.get("template"), "on": on,
@@ -457,7 +450,7 @@ class ProjectSetup:
         rv = c["resolve"]
         if rv["enabled"] and rv["library"] and rv["template"]:
             row = {"kind": "resolve", "index": 0, "name": "DaVinci Resolve", "template": rv["template"],
-                   "library": rv["library"], "on": resolve is not False, "path": None, "folder": None, "project": None,
+                   "library": rv["library"], "on": True, "path": None, "folder": None, "project": None,
                    "status": "ready", "message": None, "folders": 0}
             if errs:
                 row.update(status="waiting", message="Fill in the job details.")
@@ -469,62 +462,72 @@ class ProjectSetup:
                 elif any(k.endswith(f"::{folder}/{project}") for k in self.known_names()):
                     row.update(status="exists", message="Already in Resolve. Nothing will be changed there.")
             locs.append(row)
-        ready = [r for r in locs if r["on"] and r["status"] == "ready"]
+        # all or nothing: never leave a job half set up. Parts that already exist are left as they are.
+        ready = [r for r in locs if r["status"] == "ready"]
+        blocked = [r for r in locs if r["status"] not in ("ready", "exists")]
         return {"job": values["job"], "errors": errs, "warnings": warnings, "locations": locs,
-                "can_create": not errs and bool(ready)}
+                "can_create": not errs and bool(ready) and not blocked}
 
     # ---- create
-    def create(self, fields: dict, drive, extras, resolve=None) -> dict:
-        if not isinstance(extras, list) or not all(isinstance(i, int) and not isinstance(i, bool) for i in extras):
-            return {"ok": False, "error": "Choose where to create the folders."}
+    def create(self, fields: dict, drive=None) -> dict:
         if not self._lock.acquire(blocking=False):
             return {"ok": False, "error": "Another project is being created. Try again in a moment."}
         try:
-            p = self.plan(fields, drive, set(extras), resolve)
+            p = self.plan(fields, drive)
             if not p["can_create"]:
-                return {"ok": False, "error": "Nothing to create. Check the details and locations.", "plan": p}
+                return {"ok": False, "error": "Not everything can be made yet, so nothing was. Check the list.", "plan": p}
             values = job_values(fields, self.clock().date())
             templates, _ = self.templates()
-            results = []
+            results, made_here, failed = [], [], False
             job = None
             for row in p["locations"]:
-                if not row["on"]:
-                    continue
+                if row["status"] != "ready":
+                    continue  # made before ("exists"): left as it is
                 if row["kind"] == "resolve":
-                    if row["status"] == "ready":
-                        tpl = row["template"].split("/")
-                        job = {"state": "queued", "library": row["library"], "template_path": tpl[:-1],
-                               "template": tpl[-1], "folder": row["folder"].split("/"), "project": row["project"],
-                               "detail": "Waiting its turn", "message": None}
-                    else:
-                        job = {"state": "skipped", "library": row["library"], "project": row["project"],
-                               "message": row["message"]}
+                    tpl = row["template"].split("/")
+                    job = {"state": "queued", "library": row["library"], "template_path": tpl[:-1],
+                           "template": tpl[-1], "folder": row["folder"].split("/"), "project": row["project"],
+                           "detail": "Waiting its turn", "message": None}
                     continue
                 res = {"kind": row["kind"], "name": row["name"], "path": row["path"], "ok": False, "folders": 0,
                        "error": None}
-                if row["status"] != "ready":
-                    res["error"] = row["message"]
-                else:
-                    try:
-                        res["folders"] = self._make(Path(row["path"]), templates[row["template"]], values)
-                        res["ok"] = True
-                    except OSError as e:
-                        res["error"] = PERMISSION_HELP if isinstance(e, PermissionError) else (
-                            "Already exists. Nothing was changed there." if isinstance(e, FileExistsError)
-                            else f"Couldn't create the folders: {e.strerror or e}. Nothing was left half made.")
                 results.append(res)
+                if failed:
+                    res["error"] = "Not made, because another part failed."
+                    continue
+                try:
+                    made = self._make(Path(row["path"]), templates[row["template"]], values)
+                    made_here.append((res, made))
+                    res.update(ok=True, folders=len(templates[row["template"]]))
+                except OSError as e:
+                    failed = True
+                    res["error"] = PERMISSION_HELP if isinstance(e, PermissionError) else (
+                        "Already exists. Nothing was changed there." if isinstance(e, FileExistsError)
+                        else f"Couldn't create the folders: {e.strerror or e}.")
+            if failed:  # all or nothing: take back what this attempt made elsewhere, and don't make the project
+                for res, made in reversed(made_here):
+                    self._remove(made)
+                    res.update(ok=False, folders=0, error="Taken back, because another part failed.")
+                job = None
             rid = self._record(values, fields, results, job)
             if job and job["state"] == "queued":
                 with self._mlock:
                     self._queue.append(rid)
             self._scan_cache = None
-            return {"ok": all(r["ok"] for r in results) and (not job or job["state"] == "queued"),
-                    "id": rid, "job": values["job"], "results": results, "resolve": job}
+            return {"ok": not failed, "id": rid, "job": values["job"], "results": results, "resolve": job}
         finally:
             self._lock.release()
 
-    def _make(self, dest: Path, tree: list[str], values: dict) -> int:
-        """Create dest and the template's folders inside it. On any failure, remove what this call made."""
+    @staticmethod
+    def _remove(made: list[Path]) -> None:
+        for d in reversed(made):
+            try:
+                d.rmdir()  # only ever removes empty folders this app just created
+            except OSError:
+                pass
+
+    def _make(self, dest: Path, tree: list[str], values: dict) -> list[Path]:
+        """Create dest and the template's folders inside it; returns what was made. On failure, removes it again."""
         made: list[Path] = []
         missing = []
         anc = dest.parent
@@ -542,13 +545,9 @@ class ProjectSetup:
                 self.mkdir(d)
                 made.append(d)
         except OSError:
-            for d in reversed(made):
-                try:
-                    d.rmdir()  # only ever removes empty folders this call created
-                except OSError:
-                    pass
+            self._remove(made)
             raise
-        return len(tree)
+        return made
 
     def _load(self) -> list:
         try:

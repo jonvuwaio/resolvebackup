@@ -84,12 +84,11 @@ class ConfigTests(unittest.TestCase):
             {"name": "B", "template": "Project", "path": "/Volumes/B/Projects"},
             {"name": "C", "template": "Project", "path": "/Volumes/C/{client}/{oops}/{job}"},
             {"name": "c", "template": "", "path": "/Volumes/C/../{job}"}],
-            "extras": [{"name": "E", "template": "D", "path": "/Volumes/E/{job}", "default_on": "yes"}], "x": 1})
+            "extras": [{"name": "E", "template": "D", "path": "/Volumes/E/{job}"}], "x": 1})
         self.assertEqual(set(errs), {"project_setup.templates_dir", "project_setup.drives.0.path",
                                      "project_setup.drives.1.path", "project_setup.drives.2.path",
                                      "project_setup.drives.3.name", "project_setup.drives.3.template",
-                                     "project_setup.drives.3.path", "project_setup.extras.0.default_on",
-                                     "project_setup.x"})
+                                     "project_setup.drives.3.path", "project_setup.x"})
         self.assertIn("{oops}", errs["project_setup.drives.2.path"])
 
     def test_dashboard_settings_save_it(self):
@@ -152,18 +151,19 @@ class SetupTests(unittest.TestCase):
         drive, extra = p["locations"]
         self.assertEqual((drive["kind"], drive["name"], drive["status"], drive["folders"], drive["on"]),
                          ("drive", "Colour-3-Raid", "ready", 4, True))
-        self.assertEqual((extra["kind"], extra["on"]), ("extra", False))
+        self.assertEqual((extra["kind"], extra["on"], extra["status"]), ("extra", True, "ready"))  # every job gets it
         self.assertIn("SaatchiSaatchi is a new client folder.", p["warnings"])
         self.assertEqual(self.s.plan({**FIELDS, "job_no": "WC095"})["warnings"][0],
                          "WC095 is already used by WC095_AaronWheeler_ByFeel.")
-        self.assertEqual(self.s.plan(FIELDS, drive=1)["locations"][0]["status"], "drive_missing")
+        missing = self.s.plan(FIELDS, drive=1)
+        self.assertEqual(missing["locations"][0]["status"], "drive_missing")
+        self.assertFalse(missing["can_create"])  # never half a job
         self.assertIn("drive", self.s.plan(FIELDS, drive=7)["errors"])
-        self.assertTrue(self.s.plan(FIELDS, extras={0})["locations"][1]["on"])
         self.assertFalse(self.s.plan({**FIELDS, "title": ""})["can_create"])
         self.assertFalse(any(self.d.joinpath("Volumes/Colour-3-Raid/Projects").glob("Saatchi*")))  # touched nothing
 
     def test_create_makes_the_tree_and_records_it(self):
-        r = self.s.create(FIELDS, 0, [0])
+        r = self.s.create(FIELDS, 0)
         self.assertTrue(r["ok"], r)
         job = self.rig.vol / "Colour-3-Raid/Projects/SaatchiSaatchi/WC105_Saatchi_Plusnet_Plusso"
         self.assertTrue((job / "GRADE/SOURCE").is_dir())
@@ -176,9 +176,39 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(self.s.payload()["last_drive"], "Colour-3-Raid")
         self.assertEqual(self.s.payload()["next_job_no"], "WC106")
         # a second go never merges into the existing job
-        again = self.s.create(FIELDS, 0, [])
+        again = self.s.create(FIELDS, 0)
         self.assertFalse(again["ok"])
-        self.assertEqual(self.s.plan(FIELDS)["locations"][0]["status"], "exists")
+        self.assertEqual([x["status"] for x in self.s.plan(FIELDS)["locations"]], ["exists", "exists"])
+
+    def test_a_missing_part_blocks_the_whole_job(self):
+        self.rig.cfg["project_setup"]["extras"][0]["path"] = str(self.rig.vol / "Gone/Projects/{job}")
+        r = self.s.create(FIELDS, 0)
+        self.assertFalse(r["ok"])
+        self.assertFalse((self.rig.vol / "Colour-3-Raid/Projects/SaatchiSaatchi").exists())
+
+    def test_a_part_that_exists_is_left_alone_and_the_rest_made(self):
+        (self.rig.vol / "WashDeliverables/Deliverables/Projects/WC105_Saatchi_Plusnet_Plusso").mkdir()
+        r = self.s.create(FIELDS, 0)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual([x["kind"] for x in r["results"]], ["drive"])
+        self.assertFalse(any((self.rig.vol / "WashDeliverables/Deliverables/Projects/WC105_Saatchi_Plusnet_Plusso").iterdir()))
+
+    def test_failure_in_a_later_part_takes_back_the_earlier_ones(self):
+        self.rig.cfg["project_setup"]["resolve"] = {"enabled": True, "library": "L", "template": "T/Tpl"}
+
+        def mkdir(p):
+            if "Deliverables/Projects/WC105" in str(p) and p.name == "WIPs":
+                raise OSError(5, "Input/output error")
+            p.mkdir()
+        self.s.mkdir = mkdir
+        r = self.s.create(FIELDS, 0)
+        self.assertFalse(r["ok"])
+        self.assertIn("Taken back", r["results"][0]["error"])
+        self.assertIn("Input/output error", r["results"][1]["error"])
+        self.assertFalse((self.rig.vol / "Colour-3-Raid/Projects/SaatchiSaatchi").exists())
+        self.assertFalse((self.rig.vol / "WashDeliverables/Deliverables/Projects/WC105_Saatchi_Plusnet_Plusso").exists())
+        self.assertIsNone(r["resolve"])
+        self.assertFalse(self.s.has_pending())
 
     def test_failure_part_way_leaves_nothing_behind(self):
         calls = []
@@ -189,9 +219,10 @@ class SetupTests(unittest.TestCase):
                 raise OSError(28, "No space left on device")
             p.mkdir()
         self.s.mkdir = mkdir
-        r = self.s.create(FIELDS, 0, [])
+        r = self.s.create(FIELDS, 0)
         self.assertFalse(r["ok"])
         self.assertIn("No space left", r["results"][0]["error"])
+        self.assertIn("another part failed", r["results"][1]["error"])
         self.assertFalse((self.rig.vol / "Colour-3-Raid/Projects/SaatchiSaatchi").exists())  # new client folder gone too
         self.assertTrue((self.rig.vol / "Colour-3-Raid/Projects/AaronWheeler").is_dir())
 
@@ -199,7 +230,7 @@ class SetupTests(unittest.TestCase):
         def mkdir(p):
             raise PermissionError(1, "Operation not permitted")
         self.s.mkdir = mkdir
-        self.assertIn("Privacy & Security", self.s.create(FIELDS, 0, [])["results"][0]["error"])
+        self.assertIn("Privacy & Security", self.s.create(FIELDS, 0)["results"][0]["error"])
 
     def test_resolve_row(self):
         self.rig.cfg["project_setup"]["resolve"] = {"enabled": True, "library": "WashOrgSrvrDB_1",
@@ -208,18 +239,17 @@ class SetupTests(unittest.TestCase):
         self.assertEqual((row["kind"], row["status"], row["on"]), ("resolve", "ready", True))
         self.assertEqual((row["folder"], row["project"]), ("SaatchiSaatchi/WC105_Saatchi_Plusnet_Plusso",
                                                            "WC105_Saatchi_Plusnet_Plusso_CV1"))
-        self.assertFalse(self.s.plan(FIELDS, resolve=False)["locations"][-1]["on"])
         self.rig.names.append("db_x::SaatchiSaatchi/WC105_Saatchi_Plusnet_Plusso/WC105_Saatchi_Plusnet_Plusso_CV1")
         self.assertEqual(self.s.plan(FIELDS)["locations"][-1]["status"], "exists")
-        r = self.s.create(FIELDS, 0, [])
-        self.assertEqual(r["resolve"]["state"], "skipped")  # folders still made
+        r = self.s.create(FIELDS, 0)
+        self.assertIsNone(r["resolve"])  # already in Resolve: left alone, folders still made
         self.assertTrue(r["results"][0]["ok"])
         self.assertFalse(self.s.has_pending())
 
     def test_resolve_only_and_queue(self):
         self.rig.cfg["project_setup"].update(drives=[], extras=[], resolve={
             "enabled": True, "library": "L", "template": "T/Tpl", "project": "{job}_CV1"})
-        r = self.s.create(FIELDS, None, [])
+        r = self.s.create(FIELDS)
         self.assertTrue(r["ok"], r)
         job = self.s.next_resolve_job()
         self.assertEqual((job["template_path"], job["template"], job["folder"]),
@@ -231,8 +261,8 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(self.s.recent(1)[0]["resolve"]["state"], "done")
 
     def test_bad_requests(self):
-        self.assertFalse(self.s.create(FIELDS, 0, "all")["ok"])
-        self.assertFalse(self.s.create({**FIELDS, "client": "a b"}, 0, [])["ok"])
+        self.assertFalse(self.s.create({**FIELDS, "client": "a b"}, 0)["ok"])
+        self.assertFalse(self.s.create(FIELDS, "first")["ok"])
 
 
 class ApiTests(unittest.TestCase):

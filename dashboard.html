@@ -392,7 +392,7 @@ details[open] > summary { margin-bottom: 4px; }
       <div class="err" data-nperr="title"></div></div>
     <p class="jobname empty" id="npJob">Job name appears here</p>
     <ul class="warns" id="npWarn"></ul>
-    <div class="f"><span class="lab">Folders made</span><ul class="where" id="npWhere"></ul></div>
+    <div class="f"><span class="lab">This job gets</span><ul class="where" id="npWhere"></ul></div>
     <p class="soon">Frame.io set-up comes next.</p>
     <ul class="results" id="npResults" hidden></ul>
     <details style="margin-top:28px" id="npEdit">
@@ -402,8 +402,8 @@ details[open] > summary { margin-bottom: 4px; }
         <div class="hint">Each folder in here is a template. Change a template there and new jobs follow it.</div>
         <div class="err" data-ederr="project_setup.templates_dir"></div></div>
       <div class="f"><span class="lab">Project drives</span><div id="edDrives"></div></div>
-      <div class="f"><span class="lab">Also offer</span>
-        <div class="hint">Other places a job can get folders, for example deliverables. Tick them per job.</div>
+      <div class="f"><span class="lab">Every job also gets</span>
+        <div class="hint">Folders made for every job as well as on its project drive, for example the deliverables structure.</div>
         <div id="edExtras"></div>
         <button type="button" class="btn" id="edAddExtra" style="margin-top:8px">Add a location</button></div>
       <div class="f"><label class="check"><input type="checkbox" id="edRvOn"> Also make a DaVinci Resolve project</label>
@@ -820,7 +820,7 @@ details[open] > summary { margin-bottom: 4px; }
 
   // ---------- new project ----------
   const ADD = "__add__";
-  const NP = { data: null, drive: null, extras: null, resolve: null, jobId: null, clientTouched: false, touched: new Set(), showAll: false,
+  const NP = { data: null, drive: null, jobId: null, clientTouched: false, touched: new Set(), showAll: false,
                timer: null, seq: 0, plan: null, busy: false, done: false, editInitial: null, opener: null };
   const STATUS_WORD = { ready: "Ready", waiting: "Waiting for the job details", exists: "Already exists",
                         drive_missing: "Drive not connected", template_missing: "Template missing", not_writable: "Can't write here" };
@@ -851,7 +851,7 @@ details[open] > summary { margin-bottom: 4px; }
   async function preview() {
     const seq = ++NP.seq;
     try {
-      const p = await api("/api/project-setup/preview", { fields: npFields(), drive: NP.drive, extras: NP.extras, resolve: NP.resolve });
+      const p = await api("/api/project-setup/preview", { fields: npFields(), drive: NP.drive });
       if (seq !== NP.seq) return;
       NP.plan = p; renderPlan();
     } catch (e) { $("npMsg").className = "msg-line bad"; $("npMsg").textContent = "Couldn't reach the backup service."; }
@@ -864,19 +864,21 @@ details[open] > summary { margin-bottom: 4px; }
     $("npWarn").replaceChildren(...p.warnings.map((w) => h("li", {}, w)));
     const tpl = (NP.data && NP.data.templates) || {};
     $("npWhere").replaceChildren(...p.locations.map((r) => {
-      const st = !r.on ? "Not this time" : r.status === "ready" ? (r.folders ? `Ready, ${plural(r.folders, "folder")}` : "Ready") : (r.message || STATUS_WORD[r.status]);
-      const head = r.kind === "drive" ? h("span", { class: "name" }, r.name)
-        : r.kind === "resolve" ? h("label", { class: "check" }, h("input", { type: "checkbox", "data-resolve": "1", checked: r.on }), "DaVinci Resolve project")
-        : h("label", { class: "check" }, h("input", { type: "checkbox", "data-extra": String(r.index), checked: r.on }), r.name);
+      const st = r.status === "ready" ? (r.folders ? `Ready, ${plural(r.folders, "folder")}` : "Ready") : (r.message || STATUS_WORD[r.status]);
+      const head = h("span", { class: "name" }, r.kind === "resolve" ? "DaVinci Resolve project" : r.name);
       if (r.kind === "resolve") return h("li", {}, head, h("span", { class: "path" }, r.path || r.library),
-        h("span", { class: "chip " + (r.on ? r.status : "waiting") }, h("i"), r.on && r.status === "ready" ? `Ready, a copy of ${r.template}` : st));
+        h("span", { class: "chip " + r.status }, h("i"), r.status === "ready" ? `Ready, a copy of ${r.template}` : st));
       const tree = tpl[r.template];
       return h("li", {}, head, r.path ? h("span", { class: "path" }, r.path) : null,
-        h("span", { class: "chip " + (r.on ? r.status : "waiting") }, h("i"), st),
+        h("span", { class: "chip " + r.status }, h("i"), st),
         tree && tree.length ? h("details", {}, h("summary", {}, `${r.template} template`), h("div", { class: "tree" }, treeText(tree))) : null);
     }));
     if (!p.locations.length) $("npWhere").append(h("li", { class: "none" }, "Add a project drive to start."));
-    if (!NP.done) $("npCreate").disabled = !p.can_create || NP.busy;
+    if (!NP.done) {
+      $("npCreate").disabled = !p.can_create || NP.busy;
+      const blocked = ok && p.locations.some((r) => !["ready", "exists"].includes(r.status));
+      if (!NP.busy) { $("npMsg").className = "msg-line" + (blocked ? " bad" : ""); $("npMsg").textContent = blocked ? "Everything above has to be ready before the job is made." : ""; }
+    }
   }
 
   function clearDone() {
@@ -899,12 +901,6 @@ details[open] > summary { margin-bottom: 4px; }
   $("npForm").addEventListener("focusout", (ev) => {
     const k = { npJobNo: "job_no", npClientFolder: "client_folder", npClient: "client", npTitle: "title" }[ev.target.id];
     if (k && ev.target.value.trim()) { NP.touched.add(k); renderPlan(); }
-  });
-  $("npWhere").addEventListener("change", (ev) => {
-    if (ev.target.dataset.resolve) { NP.resolve = ev.target.checked; clearDone(); schedulePreview(); return; }
-    if (!ev.target.dataset.extra) return;
-    NP.extras = [...document.querySelectorAll("#npWhere [data-extra]:checked")].map((x) => Number(x.dataset.extra));
-    clearDone(); schedulePreview();
   });
   $("npDrive").addEventListener("change", (ev) => {
     if (ev.target.value === ADD) { openAddDrive(); return; }
@@ -976,10 +972,9 @@ details[open] > summary { margin-bottom: 4px; }
       h("div", { class: "row" },
         h("input", { type: "text", "data-k": "name", value: x.name || "", "aria-label": "Name", placeholder: "Name" }),
         h("select", { "data-k": "template", "aria-label": "Template" }, ...tpls.map((t) => h("option", { value: t, selected: t === x.template }, t))),
-        kind === "extras" ? h("label", { class: "check", style: "flex:none;font-weight:400" }, h("input", { type: "checkbox", "data-k": "default_on", checked: !!x.default_on }), "Ticked") : null,
         h("button", { type: "button", class: "btn", "data-remove": kind + ":" + i }, "Remove")),
       h("div", { class: "row" }, h("input", { type: "text", "data-k": "path", value: x.path || "", spellcheck: "false", "aria-label": "Path" })),
-      ...["name", "template", "path", "default_on"].map((k) => h("div", { class: "err", "data-ederr": pre + k })));
+      ...["name", "template", "path"].map((k) => h("div", { class: "err", "data-ederr": pre + k })));
   }
   function renderEditor(c) {
     $("edTemplates").value = c.templates_dir || "";
@@ -1011,7 +1006,7 @@ details[open] > summary { margin-bottom: 4px; }
   });
   $("edAddExtra").addEventListener("click", () => {
     const cur = collectEditor(), t = Object.keys((NP.data && NP.data.templates) || {});
-    cur.extras.push({ name: "", template: t[0] || "", path: "/Volumes/", default_on: false });
+    cur.extras.push({ name: "", template: t[0] || "", path: "/Volumes/" });
     renderEditor(cur); edDirty();
     const rows = $("edExtras").querySelectorAll(".ed-row"); rows[rows.length - 1].querySelector("input").focus();
   });
@@ -1027,7 +1022,7 @@ details[open] > summary { margin-bottom: 4px; }
   $("edSave").addEventListener("click", async () => {
     const cur = collectEditor();
     if (await saveSetup(cur, $("edMsg"), "ederr", "")) {
-      NP.editInitial = null; NP.extras = null; NP.resolve = null;
+      NP.editInitial = null;
       if (NP.drive != null && NP.drive >= cur.drives.length) NP.drive = null;
       await loadSetup(); clearDone(); schedulePreview();
     }
@@ -1038,15 +1033,14 @@ details[open] > summary { margin-bottom: 4px; }
     const msg = $("npMsg");
     if (NP.done) {  // start another
       for (const id of ["npJobNo", "npClientFolder", "npClient", "npTitle"]) $(id).value = "";
-      NP.clientTouched = false; NP.touched.clear(); NP.showAll = false; NP.extras = null; NP.resolve = null; NP.jobId = null; clearDone();
+      NP.clientTouched = false; NP.touched.clear(); NP.showAll = false; NP.jobId = null; clearDone();
       await loadSetup(); preview(); $("npClientFolder").focus(); return;
     }
     NP.showAll = true; renderPlan();
     if (!NP.plan || !NP.plan.can_create) return;
     NP.busy = true; $("npCreate").disabled = true; msg.className = "msg-line"; msg.textContent = "Creating";
-    const extras = NP.plan.locations.filter((x) => x.kind === "extra" && x.on).map((x) => x.index);
     try {
-      const r = await api("/api/project-setup/create", { fields: npFields(), drive: NP.drive, extras, resolve: NP.resolve });
+      const r = await api("/api/project-setup/create", { fields: npFields(), drive: NP.drive });
       if (r.results) {
         $("npResults").replaceChildren(...r.results.map((x) => h("li", { class: x.ok ? "" : "bad" },
           x.ok ? `${x.name}: made ${plural(x.folders, "folder")}` : `${x.name}: nothing made`,
