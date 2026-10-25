@@ -332,6 +332,55 @@ class JobListTests(unittest.TestCase):
         self.assertIn("job_list", self.s.payload())
 
 
+class DriveTests(unittest.TestCase):
+    def setUp(self):
+        t = tempfile.TemporaryDirectory()
+        self.addCleanup(t.cleanup)
+        self.rig = Rig(Path(t.name))
+        self.s = self.rig.setup
+        self.rig.cfg["backup_dir"] = str(self.rig.vol / "WashDeliverables/Backups")
+        (self.rig.vol / "Shared").mkdir()
+        figures = {"Colour-3-Raid": (66e12, 62e12, 4e12), "WashDeliverables": (190e12, 120e12, 70e12),
+                   "Shared": (190e12, 120e12, 70e12)}
+
+        def usage(v):
+            if v.name == "Wash-Raid-6":
+                raise OSError("gone")
+            return figures[v.name]
+        self.s.usage = usage
+
+    def test_sizes_roles_and_missing_drives(self):
+        rows = {r["name"]: r for r in self.s.drives_status()}
+        self.assertEqual(rows["Colour-3-Raid"]["roles"], ["Projects"])
+        self.assertEqual((rows["Colour-3-Raid"]["total"], rows["Colour-3-Raid"]["free"]), (66e12, 4e12))
+        self.assertEqual(rows["WashDeliverables"]["roles"], ["Deliverables", "Resolve backups", "Folder templates"])
+        self.assertEqual(rows["WashDeliverables"]["shares_with"], ["Shared"])
+        self.assertIn("gone", rows["Wash-Raid-6"]["problem"])
+        self.assertEqual((rows["Colour-9-Raid"]["connected"], rows["Colour-9-Raid"]["roles"]), (False, ["Projects"]))
+
+    def test_a_hung_drive_does_not_hold_the_page(self):
+        import time as _t
+        self.s.usage = lambda v: _t.sleep(5)
+        t0 = _t.monotonic()
+        rows = self.s.drives_status(timeout=0.2)
+        self.assertLess(_t.monotonic() - t0, 2)
+        self.assertTrue(all(r["problem"] for r in rows))
+
+    def test_df_figures(self):
+        class R:
+            returncode, stderr = 0, ""
+            stdout = ("Filesystem 1024-blocks Used Available Capacity Mounted on\n"
+                      "//wash@10.0.0.241/Colour-1-Raid 128906205152 102502344832 26403860320 80% /Volumes/Colour-1-Raid\n")
+        total, used, free = ps.disk_usage(Path("/Volumes/Colour-1-Raid"), run=lambda *a, **k: R())
+        self.assertEqual(total, 128906205152 * 1024)  # 132 TB: more than Python's own figure can hold on macOS
+        self.assertEqual(free, 26403860320 * 1024)
+
+    def test_df_on_this_machine(self):
+        total, used, free = ps.disk_usage(Path(tempfile.gettempdir()))
+        self.assertGreater(total, 0)
+        self.assertGreaterEqual(total, free)
+
+
 class ApiTests(unittest.TestCase):
     def test_endpoints(self):
         with tempfile.TemporaryDirectory() as d:

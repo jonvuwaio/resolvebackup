@@ -36,7 +36,9 @@ import csv
 import io
 import re
 import secrets
+import shutil
 import ssl
+import subprocess
 import threading
 import time
 import urllib.error
@@ -321,6 +323,23 @@ def _validate_job_list_url(v, errs: dict):
     return v.strip()
 
 
+_DF_RE = re.compile(r"^.*?\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+%\s+/.*$")
+
+
+def disk_usage(path: Path, run=subprocess.run, timeout: float = 3) -> tuple[int, int, int]:
+    """(total, used, free) in bytes. Uses df where there is one: Python's own figures wrap around on macOS for network
+    shares bigger than 16 TB."""
+    if Path("/bin/df").exists() or run is not subprocess.run:
+        r = run(["/bin/df", "-k", "-P", str(path)], capture_output=True, text=True, timeout=timeout)
+        m = _DF_RE.match((r.stdout or "").strip().splitlines()[-1] if (r.stdout or "").strip() else "")
+        if r.returncode == 0 and m:
+            total, used, free = (int(x) * 1024 for x in m.groups())
+            return total, used, free
+        raise OSError((r.stderr or "").strip() or "df gave no figures")
+    u = shutil.disk_usage(path)
+    return u.total, u.used, u.free
+
+
 def _write_json(path: Path, data) -> None:
     tmp = path.with_name(f".{path.name}.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
@@ -346,8 +365,10 @@ class ProjectSetup:
     """Creates job folders. One per service; safe to call from the dashboard's threads."""
 
     def __init__(self, get_cfg, state_dir: Path, known_names=lambda: (), volumes: Path = Path("/Volumes"),
-                 mkdir=None, clock=None, libraries=lambda: [], frameio=None, fetch=None, library_names=lambda: {}):
+                 mkdir=None, clock=None, libraries=lambda: [], frameio=None, fetch=None, library_names=lambda: {},
+                 usage=disk_usage):
         self.get_cfg = get_cfg
+        self.usage = usage
         self.fetch = fetch          # url -> text, for the job list; None = never fetch
         self.library_names = library_names  # {database id: library name}, to offer template projects
         self._jobs_cache: tuple[float, str, list] | None = None
@@ -522,6 +543,70 @@ class ProjectSetup:
         rows = [{"job": n, "done": n in known} for n in self._jobs_cache[2]]
         rows.sort(key=lambda r: number(r["job"]), reverse=True)
         return {"configured": True, "names": rows, "problem": self._jobs_problem}
+
+    def drives_status(self, timeout: float = 3) -> list[dict]:
+        """Every connected drive with its size and free space, and what this app uses it for. Drives that are set up
+        here but not connected are listed too. A drive that doesn't answer in time (a hung network share) is shown as
+        such rather than holding the page up."""
+        c, full = self.cfg(), self.get_cfg()
+        roles: dict[str, list[str]] = {}
+
+        def note(path, role):
+            if not path:
+                return
+            try:
+                rel = Path(str(path).split("{", 1)[0]).relative_to(self.volumes)
+            except ValueError:
+                return
+            if rel.parts:
+                roles.setdefault(rel.parts[0], [])
+                if role not in roles[rel.parts[0]]:
+                    roles[rel.parts[0]].append(role)
+        for d in c["drives"]:
+            note(d.get("path"), "Projects")
+        for d in c["extras"]:
+            note(d.get("path"), d.get("name") or "Extra")
+        note(full.get("backup_dir"), "Resolve backups")
+        note(c["templates_dir"], "Folder templates")
+        try:
+            vols = sorted((v for v in self.volumes.iterdir() if not _junk(v.name)), key=lambda v: v.name.lower())
+        except OSError:
+            vols = []
+        results: dict[str, object] = {}
+
+        def measure(v: Path):
+            try:
+                results[v.name] = self.usage(v)
+            except (OSError, subprocess.SubprocessError) as e:
+                results[v.name] = e if isinstance(e, OSError) else OSError("it didn't answer")
+        threads = [threading.Thread(target=measure, args=(v,), daemon=True) for v in vols]
+        for t in threads:
+            t.start()
+        end = time.monotonic() + timeout
+        for t in threads:
+            t.join(max(0, end - time.monotonic()))
+        out = []
+        for v in vols:
+            u = results.get(v.name)
+            row = {"name": v.name, "roles": roles.get(v.name, []), "connected": True, "total": None, "free": None,
+                   "problem": None, "system": v.is_symlink() and os.path.realpath(v) == "/"}
+            if u is None:
+                row["problem"] = "Didn't answer in time."
+            elif isinstance(u, OSError):
+                row["problem"] = f"Couldn't read it: {u.strerror or u}."
+            else:
+                row.update(total=u[0], free=u[2], used=u[1])
+            out.append(row)
+        # shares on the same server space (identical figures): say so, so the space isn't counted twice
+        for row in out:
+            if row["total"]:
+                twins = [o["name"] for o in out if o is not row and o["total"] == row["total"] and o.get("used") == row.get("used")]
+                if twins:
+                    row["shares_with"] = twins
+        seen = {v.name for v in vols}
+        out += [{"name": n, "roles": r, "connected": False, "total": None, "free": None, "problem": "Not connected.",
+                 "system": False} for n, r in sorted(roles.items()) if n not in seen]
+        return out
 
     def library_projects(self) -> dict:
         """{library name: ["Folder/Project", …]} from the backup record, to pick the Resolve template from."""

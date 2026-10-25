@@ -154,6 +154,20 @@ body.pg-projects #newDrawer header h2 { font-size: 24px; font-weight: 500; }
 body.pg-projects #newDrawer form { overflow: visible; }
 body.pg-projects #newDrawer footer { position: sticky; bottom: 0; background: var(--bg); }
 body.pg-backups #newDrawer, body.pg-backups #recentJobs { display: none; }
+#drivesPanel { max-width: 1100px; margin: 0 auto; padding: 24px 24px 0; }
+#drivesPanel h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; }
+.drive-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.drive { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; min-width: 0; }
+.drive .dn { font-weight: 500; overflow-wrap: anywhere; }
+.drive .dr { color: var(--dim); font-size: 12px; min-height: 1.4em; }
+.drive .meter { height: 6px; background: var(--raised); border-radius: 3px; margin: 8px 0 6px; overflow: hidden; }
+.drive .meter i { display: block; height: 100%; background: var(--ok); }
+.drive.low .meter i { background: var(--wait); } .drive.full .meter i { background: var(--bad); }
+.drive .df { font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.drive.low .df { color: var(--wait); } .drive.full .df { color: var(--bad); }
+.drive.off { opacity: .6; } .drive.off .df { color: var(--wait); }
+.drive small { display: block; color: var(--faint); font-size: 11.5px; margin-top: 2px; }
+body.pg-backups #drivesPanel { display: none; }
 #recentJobs { max-width: 760px; margin: 0 auto; padding: 8px 24px 56px; }
 #recentJobs h2 { font-size: 15px; font-weight: 600; margin: 24px 0 6px; }
 #recentJobs ul { margin: 0; padding: 0; list-style: none; }
@@ -396,6 +410,10 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   <footer><span id="saveMsg" class="msg-line" role="status"></span><button class="btn primary" id="save" disabled>Save settings</button></footer>
 </aside>
 
+<section id="drivesPanel" aria-labelledby="drivesH" hidden>
+  <h2 id="drivesH">Drives</h2>
+  <div class="drive-grid" id="drivesGrid"></div>
+</section>
 <main id="newDrawer" class="drawer" aria-labelledby="newH">
   <header><h2 id="newH">New project</h2></header>
   <form id="npForm" autocomplete="off">
@@ -1340,7 +1358,26 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   });
 
   // open / close
+  // drive capacity, refreshed every minute
+  async function loadDrives() {
+    try {
+      const d = await api("/api/drives");
+      $("drivesPanel").hidden = !d.drives.length;
+      $("drivesGrid").replaceChildren(...d.drives.map((x) => {
+        const used = x.total ? (x.total - x.free) / x.total : null, freePct = x.total ? x.free / x.total : null;
+        const cls = !x.connected || x.problem ? "off" : freePct < 0.05 ? "full" : freePct < 0.15 ? "low" : "";
+        const roles = x.roles.length ? x.roles.join(", ") : x.system ? "This Mac" : "";
+        return h("div", { class: "drive " + cls, title: x.total ? `${bytes(x.total - x.free)} used of ${bytes(x.total)}` : "" },
+          h("div", { class: "dn" }, x.name), h("div", { class: "dr" }, roles),
+          h("div", { class: "meter" }, h("i", { style: `width:${used == null ? 0 : Math.round(used * 100)}%` })),
+          h("div", { class: "df" }, x.problem ? x.problem : `${bytes(x.free)} free of ${bytes(x.total)}`),
+          x.shares_with ? h("small", {}, `Same storage as ${x.shares_with.join(", ")}`) : null);
+      }));
+    } catch (e) { /* keep the last figures */ }
+  }
+
   async function showProjects() {
+    loadDrives(); setInterval(loadDrives, 60000);
     try { await loadSetup(); } catch (e) { $("npMsg").className = "msg-line bad"; $("npMsg").textContent = "Couldn't reach the service. Reload the page to try again."; return; }
     preview(); renderRecent();
     (NP.drive == null ? $("adVol") : $("npClientFolder")).focus();

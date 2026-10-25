@@ -62,7 +62,7 @@ import frameio
 import project_setup
 
 APP = "resolve-cloud-backup"
-VERSION = "1.15.0"
+VERSION = "1.16.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -1001,6 +1001,14 @@ FOLDER_PROMPTS = {"backup": "Choose where Colour Project Manager saves your back
                   "projects": "Choose the folder new jobs go in on this drive"}
 
 
+def free_bytes(path) -> int:
+    """Free space, right for big network shares too (Python's own figure wraps around on macOS above 16 TB)."""
+    try:
+        return project_setup.disk_usage(Path(path))[2]
+    except (OSError, subprocess.SubprocessError, IndexError):
+        return shutil.disk_usage(path).free
+
+
 def can_choose_folder() -> bool:
     return SYSTEM == "Darwin" and shutil.which("osascript") is not None
 
@@ -1108,7 +1116,7 @@ class Backup:
         self._t0 = time.monotonic()
         try:
             self.root.mkdir(parents=True, exist_ok=True)
-            free_gb = shutil.disk_usage(self.root).free / 1e9
+            free_gb = free_bytes(self.root) / 1e9
         except OSError as e:
             log.error("Backup folder %s is not available: %s", self.root, e)
             stats["status"] = "backup_dir_unavailable"
@@ -1930,7 +1938,7 @@ class DashboardServer:
                     files += 1
                 except OSError:
                     pass
-            free = shutil.disk_usage(root).free
+            free = free_bytes(root)
         except OSError:
             pass
         val = {"dir": str(root), "files": files, "bytes": size, "free_bytes": free}
@@ -2068,6 +2076,8 @@ def _make_handler(dash: DashboardServer):
                     fresh = (qs.get("fresh") or [""])[0] == "1"
                     self._send(200, {**dash.svc.setup.payload(fresh), "can_choose_folder": can_choose_folder(),
                                      "frameio_redirect": dash.frameio_redirect()})
+                elif path == "/api/drives":
+                    self._send(200, {"drives": dash.svc.setup.drives_status()})
                 elif path == "/api/frameio/workspaces":
                     try:
                         self._send(200, {"ok": True, "workspaces": dash.svc.frameio.workspaces()})

@@ -28,7 +28,9 @@ Files are written to a temporary name and renamed only when complete, so a crash
 ## See it working live
 
 - **Dashboard:** the service runs a small web page on your own machine only (`127.0.0.1`, never the network).
-  It has two pages: **Projects** (the start page: set up a new job, and the jobs made recently) and **Backups**.
+  It has two pages: **Projects** (the start page: every drive's free space, set up a new job, and the jobs made
+  recently) and **Backups**. Drives under 15% free show amber, under 5% red; drives set up here but not connected
+  are listed too, and shares on the same storage say so.
   The bar at the top of every page shows whether backups are running. The Backups page shows a timeline of every check with a live playhead, what is being exported right now and how far through
   the library it is, an activity feed, every project's backup status, and a **Settings** drawer (backup folder,
   interval, active hours, include/exclude, retention) that saves straight to `config.json`.
@@ -314,7 +316,7 @@ Manager → *Import Project*, and pick the newest `.drp` from the project's back
 python3 -m unittest discover -s tests -v
 ```
 
-The 193 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
+The 197 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
 collaboration scenarios, backoff and alerts, `probe`, database switching, retention, caps, filters) plus the
 scheduler, the hidden-Resolve hand-over (with faked processes), the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, the installer, and new project set-up (templates, previews, creating and rolling back folders, and its dashboard API).
 
