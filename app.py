@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Resolve Backup: the standalone Mac app.
+Colour Project Manager: the standalone Mac app.
 
 One process: the backup service, the live dashboard and the menu bar icon. Double-click the app and a dot
 appears in the menu bar; there is nothing else to install or keep running. (Packaged by build_mac_app.sh.)
@@ -28,7 +28,7 @@ def main() -> int:
         return menubar.run_app(runner, first_run=first_run)
     # Another copy (for example the older background-service install) already runs the backups:
     # just show its status instead of starting a second service.
-    menubar.notify("Resolve Backup", "Backups are already running in the background. This icon shows their status.")
+    menubar.notify("Colour Project Manager", "Backups are already running in the background. This icon shows their status.")
     return menubar.run_app(None)
 
 

@@ -10,9 +10,9 @@ jobs:
       matrix:
         include:
           - runner: macos-14          # Apple Silicon (arm64)
-            artifact: Resolve-Backup-mac
+            artifact: Colour-Project-Manager-mac
           - runner: macos-15-intel    # Intel (x86_64)
-            artifact: Resolve-Backup-mac-intel
+            artifact: Colour-Project-Manager-mac-intel
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -24,4 +24,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/Resolve-Backup.zip
+          path: dist/Colour-Project-Manager.zip

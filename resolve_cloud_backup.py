@@ -62,7 +62,7 @@ import frameio
 import project_setup
 
 APP = "resolve-cloud-backup"
-VERSION = "1.12.0"
+VERSION = "1.13.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -669,7 +669,7 @@ def run_watchdog(arg: str, alive=pid_alive, sleep=time.sleep, hidden_factory=Non
         if not alive(app_pid):
             break
         sleep(1)
-    log.warning("Resolve Backup stopped while a hidden DaVinci Resolve was running; quitting it")
+    log.warning("Colour Project Manager stopped while a hidden DaVinci Resolve was running; quitting it")
     try:
         cfg = load_config(Path(a["config"]))
     except (OSError, ValueError):
@@ -996,7 +996,7 @@ on run argv
 end run
 """
 _choose_lock = threading.Lock()
-FOLDER_PROMPTS = {"backup": "Choose where Resolve Backup saves your backups",
+FOLDER_PROMPTS = {"backup": "Choose where Colour Project Manager saves your backups",
                   "templates": "Choose the folder that holds your folder templates",
                   "projects": "Choose the folder new jobs go in on this drive"}
 
@@ -1006,7 +1006,7 @@ def can_choose_folder() -> bool:
 
 
 def choose_folder(start: str | None = None, run=subprocess.run,
-                  prompt: str = "Choose where Resolve Backup saves your backups") -> dict:
+                  prompt: str = "Choose where Colour Project Manager saves your backups") -> dict:
     """Show the macOS folder picker on this Mac. Returns {"path": ...}, {"cancelled": True} or {"error": ...}."""
     if not can_choose_folder():
         return {"error": "Choosing a folder this way only works on a Mac. Type the path instead."}
@@ -2022,7 +2022,7 @@ def _make_handler(dash: DashboardServer):
             page = ("<!doctype html><meta charset=utf-8><title>Frame.io</title><body style=\"font:16px -apple-system,"
                     "sans-serif;max-width:32em;margin:15vh auto;padding:0 20px\"><h1 style=\"font-size:22px\">"
                     f"{'Connected' if ok else 'Not connected'}</h1><p>{html.escape(text)}</p><p>"
-                    f"{'You can close this tab and go back to Resolve Backup.' if ok else 'Close this tab and try Connect Frame.io again.'}"
+                    f"{'You can close this tab and go back to Colour Project Manager.' if ok else 'Close this tab and try Connect Frame.io again.'}"
                     "</p></body>")
             self._send(200 if ok else 400, page.encode("utf-8"), "text/html; charset=utf-8",
                        {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})

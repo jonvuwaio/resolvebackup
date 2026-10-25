@@ -1,10 +1,10 @@
 #!/bin/bash
-# Build "Resolve Backup.app", a standalone menu bar app. Run this ON A MAC (apps can't be built cross-platform).
+# Build "Colour Project Manager.app", a standalone menu bar app. Run this ON A MAC (apps can't be built cross-platform).
 #
 #   ./build_mac_app.sh
 #
 # Needs Python 3.9+ (Xcode command line tools provide one: run `xcode-select --install`) and internet.
-# Result: dist/Resolve Backup.app and dist/Resolve-Backup.zip. Nothing is installed system-wide.
+# Result: dist/Colour Project Manager.app and dist/Colour-Project-Manager.zip. Nothing is installed system-wide.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -29,14 +29,14 @@ iconutil -c icns .icon.iconset -o .icon.icns || echo "(icon skipped)"
 ICON=()
 [ -f .icon.icns ] && ICON=(--icon .icon.icns)
 
-pyinstaller --noconfirm --clean --windowed --name "Resolve Backup" \
+pyinstaller --noconfirm --clean --windowed --name "Colour Project Manager" \
   --osx-bundle-identifier com.resolvecloudbackup.app \
   --add-data "dashboard.html:." \
   --hidden-import rumps --hidden-import AppKit --hidden-import Foundation --collect-data certifi \
   "${ICON[@]}" app.py
 
 # Menu bar only: no Dock icon, no app-switcher entry.
-APP="dist/Resolve Backup.app"
+APP="dist/Colour Project Manager.app"
 python - "$APP/Contents/Info.plist" <<'PY'
 import plistlib, sys
 import resolve_cloud_backup as rcb
@@ -49,7 +49,7 @@ PY
 
 # Ad-hoc signature so macOS will run it on this Mac (it is not notarised).
 codesign --force --deep --sign - "$APP"
-ditto -c -k --keepParent "$APP" "dist/Resolve-Backup.zip"
+ditto -c -k --keepParent "$APP" "dist/Colour-Project-Manager.zip"
 
 echo
 echo "Built: $APP"

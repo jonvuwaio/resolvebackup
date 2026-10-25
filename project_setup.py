@@ -48,7 +48,7 @@ _TITLE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 
-PERMISSION_HELP = ("macOS didn't let Resolve Backup write there. Allow it under System Settings > Privacy & Security "
+PERMISSION_HELP = ("macOS didn't let Colour Project Manager write there. Allow it under System Settings > Privacy & Security "
                    "> Files and Folders (Network Volumes or Removable Volumes), then try again.")
 
 

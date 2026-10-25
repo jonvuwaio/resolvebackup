@@ -348,7 +348,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
 
     class App(rumps.App):
         def __init__(self):
-            super().__init__("Resolve Backup", icon=str(icons["idle"]), template=False, quit_button=None)
+            super().__init__("Colour Project Manager", icon=str(icons["idle"]), template=False, quit_button=None)
             self.latest = (None, True, False)
             self.shown = None
             self.m_title = rumps.MenuItem("Starting")
@@ -362,7 +362,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
             self.m_login.state = login_enabled()
             self.m_folder = rumps.MenuItem("Open backup folder", callback=self.open_folder)
             self.m_log = rumps.MenuItem("Open log", callback=self.open_log)
-            self.m_quit = rumps.MenuItem("Quit Resolve Backup" if embedded else "Quit menu bar icon",
+            self.m_quit = rumps.MenuItem("Quit Colour Project Manager" if embedded else "Quit menu bar icon",
                                          callback=self.quit)
             top = [self.m_title, self.m_detail, None, self.m_new, self.m_dash, self.m_run, self.m_pause]
             if not embedded:
@@ -401,7 +401,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
                 self.m_new.set_callback(self.new_project if s["key"] not in ("off", "denied") else None)
             msg = alerts.check(s)
             if msg:
-                notify("Resolve Backup", msg)
+                notify("Colour Project Manager", msg)
 
         # ---- actions
         def say_hello(self, timer):
@@ -414,7 +414,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
                 set_login(bool(item.state))
             except OSError as e:
                 item.state = not item.state
-                notify("Resolve Backup", f"Couldn't change the login setting: {e}")
+                notify("Colour Project Manager", f"Couldn't change the login setting: {e}")
 
         def quit(self, _):
             if runner:

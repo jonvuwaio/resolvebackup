@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
-<title>Resolve Backup</title>
+<title>Colour Project Manager</title>
 <link id="icon" rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%238d9198'/%3E%3C/svg%3E">
 <style>
 /* Neutral greys on purpose: a grading suite keeps its surround free of colour cast.
@@ -539,7 +539,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     $("stateText").textContent = v.text;
     $("dot").style.background = v.color;
     $("dot").classList.toggle("run", v.key === "run");
-    document.title = `${v.text} · Resolve Backup`;
+    document.title = `${v.text} · Colour Project Manager`;
     $("icon").href = "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="${v.color.startsWith("var") ? getComputedStyle(document.documentElement).getPropertyValue(v.color.slice(4, -1)).trim() : v.color}"/></svg>`);
     const sub = $("sub"); sub.replaceChildren();
     if (s && s.resolve && s.resolve.connected) {

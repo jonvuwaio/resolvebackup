@@ -1,4 +1,8 @@
-# resolve-cloud-backup
+# Colour Project Manager
+
+Sets up new colour jobs (folders on the workstation RAID and the deliverables drive, the DaVinci Resolve project
+and the Frame.io project) and backs up DaVinci Resolve projects. It started as resolve-cloud-backup, which is still
+the name of its code, its data folder (`~/Library/Application Support/resolve-cloud-backup`) and its bundle ID.
 
 A small background service for **macOS, Windows and Linux** that incrementally backs up recently
 modified DaVinci Resolve projects (including Blackmagic Cloud projects) as `.drp` files throughout the day.
@@ -43,15 +47,15 @@ Files are written to a temporary name and renamed only when complete, so a crash
 
 ## Install as a Mac app (recommended on macOS)
 
-`Resolve Backup.app` is one standalone menu bar app: it *is* the backup service, the dashboard and the icon in a
+`Colour Project Manager.app` is one standalone menu bar app: it *is* the backup service, the dashboard and the icon in a
 single process. No Python install, no background scripts. Open it and a dot appears in the menu bar; use
-**Open at login** in its menu to have it start with your Mac. **Quit Resolve Backup** stops backups.
+**Open at login** in its menu to have it start with your Mac. **Quit Colour Project Manager** stops backups.
 
 An app has to be built on a Mac (I can't produce one from Linux), and it's one command:
 
 ```bash
 xcode-select --install        # once, if you don't have Python 3 yet
-./build_mac_app.sh            # -> dist/Resolve Backup.app  and  dist/Resolve-Backup.zip
+./build_mac_app.sh            # -> dist/Colour Project Manager.app  and  dist/Colour-Project-Manager.zip
 ```
 
 Drag the app to `/Applications` and open it. It's signed ad-hoc rather than notarised, so the first time macOS
