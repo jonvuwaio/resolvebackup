@@ -9,7 +9,8 @@ the deliverables drive). Each says which template to copy where, with the job's 
     "extras": [{"name": "Deliverables", "template": "Deliverables",
                 "path": "/Volumes/WashDeliverables/Deliverables/Projects/{job}"}]
 
-Placeholders: {job} (WC105_Client_Title), {job_no}, {client}, {client_folder}, {title}, {yyyy}, {mm}, {dd}.
+Placeholders: {job} (the job name, WC105_Client_Title), {client_folder}, {yyyy}, {mm}, {dd}, and the parts of the
+job name: {job_no} (WC105), {client} (Client: up to the second underscore) and {title} (the rest).
 They also work in template folder names.
 
 The job can also get a DaVinci Resolve project: a copy of a template project, made in the job's folder:
@@ -45,6 +46,7 @@ _JOB_RE = re.compile(r"^([A-Z]{1,3})(\d{3,5})_")
 _JOB_NO_RE = re.compile(r"^[A-Z]{1,3}\d{3,5}$")
 _PART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
 _TITLE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_JOB_NAME_RE = re.compile(r"^([A-Z]{1,3}\d{3,5})_([A-Za-z0-9][A-Za-z0-9_-]*)$")
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 
@@ -63,8 +65,12 @@ def fill(text: str, values: dict) -> str:
 
 def job_values(fields: dict, today: dt.date | None = None) -> dict:
     today = today or dt.date.today()
-    v = {k: (fields.get(k) or "").strip() for k in ("job_no", "client", "client_folder", "title")}
-    v["job"] = "_".join(x for x in (v["job_no"], v["client"], v["title"]) if x)
+    job = fields.get("job") if isinstance(fields.get("job"), str) else ""
+    job = job.strip()
+    m = _JOB_NAME_RE.match(job)
+    client, _, title = (m.group(2) if m else "").partition("_")
+    cf = fields.get("client_folder") if isinstance(fields.get("client_folder"), str) else ""
+    v = {"job": job, "job_no": m.group(1) if m else "", "client": client, "title": title, "client_folder": cf.strip()}
     v.update(yyyy=f"{today.year:04d}", mm=f"{today.month:02d}", dd=f"{today.day:02d}")
     return v
 
@@ -72,25 +78,22 @@ def job_values(fields: dict, today: dt.date | None = None) -> dict:
 def validate_fields(fields: dict) -> dict:
     """Errors by field name for the job's details. Empty when they're fine."""
     errs = {}
-    v = {k: fields.get(k) for k in ("job_no", "client", "client_folder", "title")}
+    v = {k: fields.get(k) for k in ("job", "client_folder")}
     for k, val in v.items():
         if val is not None and not isinstance(val, str):
             errs[k] = "Enter text."
     if errs:
         return errs
     v = {k: (val or "").strip() for k, val in v.items()}
-    if not v["job_no"]:
-        errs["job_no"] = "Enter a job number."
-    elif not _JOB_NO_RE.match(v["job_no"]):
-        errs["job_no"] = "Use capital letters then digits, for example WC105."
-    if not v["client"]:
-        errs["client"] = "Enter the client's name as it goes in the job name."
-    elif not _PART_RE.match(v["client"]) or len(v["client"]) > 60:
-        errs["client"] = "Use letters, numbers and hyphens only, with no spaces or underscores."
-    if not v["title"]:
-        errs["title"] = "Enter the job title."
-    elif not _TITLE_RE.match(v["title"]) or len(v["title"]) > 100:
-        errs["title"] = "Use letters, numbers, hyphens and underscores only, with no spaces."
+    job = v["job"]
+    if not job or _JOB_NO_RE.match(job.rstrip("_")):
+        errs["job"] = "Enter the job name, for example WC105_WSM_Varley_Spring26."
+    elif not re.match(r"^[A-Z]{1,3}\d{3,5}_", job):
+        errs["job"] = "Start with the job number and an underscore, for example WC105_."
+    elif not _JOB_NAME_RE.match(job) or job.endswith("_") or "__" in job:
+        errs["job"] = "Use letters, numbers, hyphens and single underscores only, with no spaces."
+    elif len(job) > 150:
+        errs["job"] = "That's too long."
     cf = v["client_folder"]
     if not cf:
         errs["client_folder"] = "Enter the client folder."
@@ -673,7 +676,7 @@ class ProjectSetup:
         with self._mlock:
             items = self._load()
             items.append({"id": rid, "at": self.clock().isoformat(timespec="seconds"), "job": values["job"],
-                          "fields": {k: values[k] for k in ("job_no", "client", "client_folder", "title")},
+                          "fields": {k: values[k] for k in ("job", "client_folder")},
                           "locations": results, "resolve": resolve})
             self._save(items)
         return rid

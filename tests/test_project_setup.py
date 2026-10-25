@@ -18,7 +18,7 @@ _fake_prefs = __import__("tempfile").mkdtemp()  # and never edit Resolve's real 
 rcb.resolve_prefs_dir = lambda: rcb.Path(_fake_prefs)
 rcb.start_watchdog = lambda cmd: None  # nor start a real watchdog process
 
-FIELDS = {"job_no": "WC105", "client": "Saatchi", "client_folder": "SaatchiSaatchi", "title": "Plusnet_Plusso"}
+FIELDS = {"job": "WC105_Saatchi_Plusnet_Plusso", "client_folder": "SaatchiSaatchi"}
 TODAY = dt.datetime(2026, 10, 25, 14, 0)
 
 
@@ -57,14 +57,17 @@ class NamingTests(unittest.TestCase):
 
     def test_fields_are_checked(self):
         self.assertEqual(ps.validate_fields(FIELDS), {})
-        bad = ps.validate_fields({"job_no": "wc105", "client": "Saatchi Saatchi", "client_folder": "a/b", "title": ""})
-        self.assertEqual(set(bad), {"job_no", "client", "client_folder", "title"})
-        self.assertIn("client", ps.validate_fields({**FIELDS, "client": "Saatchi_Saatchi"}))
+        self.assertEqual(set(ps.validate_fields({"job": "wc105_A_B", "client_folder": "a/b"})), {"job", "client_folder"})
+        for bad in ("", "WC105", "WC105_", "Saatchi_Plusnet", "WC105_Saatchi Plusnet", "WC105_A__B", "WC105_A_",
+                    "WC105_A/B", 7):
+            self.assertIn("job", ps.validate_fields({**FIELDS, "job": bad}), bad)
+        self.assertEqual(ps.validate_fields({**FIELDS, "job": "WC105_WSM-London_Varley_Spring26"}), {})
         self.assertEqual(ps.validate_fields({**FIELDS, "client_folder": "Ana Projects & Co"}), {})
 
     def test_placeholders(self):
         v = ps.job_values(FIELDS, dt.date(2026, 3, 4))
         self.assertEqual(v["job"], "WC105_Saatchi_Plusnet_Plusso")
+        self.assertEqual((v["job_no"], v["client"], v["title"]), ("WC105", "Saatchi", "Plusnet_Plusso"))
         self.assertEqual(ps.fill("/x/{client_folder}/{job}/{yyyy}{mm}{dd}_{nope}", v),
                          "/x/SaatchiSaatchi/WC105_Saatchi_Plusnet_Plusso/20260304_{nope}")
 
@@ -155,13 +158,13 @@ class SetupTests(unittest.TestCase):
                          ("drive", "Colour-3-Raid", "ready", 4, True))
         self.assertEqual((extra["kind"], extra["on"], extra["status"]), ("extra", True, "ready"))  # every job gets it
         self.assertIn("SaatchiSaatchi is a new client folder.", p["warnings"])
-        self.assertEqual(self.s.plan({**FIELDS, "job_no": "WC095"})["warnings"][0],
+        self.assertEqual(self.s.plan({**FIELDS, "job": "WC095_Saatchi_Plusnet_Plusso"})["warnings"][0],
                          "WC095 is already used by WC095_AaronWheeler_ByFeel.")
         missing = self.s.plan(FIELDS, drive=1)
         self.assertEqual(missing["locations"][0]["status"], "drive_missing")
         self.assertFalse(missing["can_create"])  # never half a job
         self.assertIn("drive", self.s.plan(FIELDS, drive=7)["errors"])
-        self.assertFalse(self.s.plan({**FIELDS, "title": ""})["can_create"])
+        self.assertFalse(self.s.plan({**FIELDS, "job": "WC105_"})["can_create"])
         self.assertFalse(any(self.d.joinpath("Volumes/Colour-3-Raid/Projects").glob("Saatchi*")))  # touched nothing
 
     def test_create_makes_the_tree_and_records_it(self):
@@ -263,7 +266,7 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(self.s.recent(1)[0]["resolve"]["state"], "done")
 
     def test_bad_requests(self):
-        self.assertFalse(self.s.create({**FIELDS, "client": "a b"}, 0)["ok"])
+        self.assertFalse(self.s.create({**FIELDS, "job": "WC105_a b"}, 0)["ok"])
         self.assertFalse(self.s.create(FIELDS, "first")["ok"])
 
 
@@ -286,6 +289,10 @@ class ApiTests(unittest.TestCase):
                                                           "Content-Type": "application/json"})
                     with urllib.request.urlopen(req) as r:
                         return json.loads(r.read())
+                for page in ("/", "/backups"):  # the projects page and the backups page are the same file
+                    req = urllib.request.Request(f"http://127.0.0.1:{dash.port}{page}?t={dash.token}")
+                    with urllib.request.urlopen(req) as r:
+                        self.assertIn(b"Colour Project Manager", r.read())
                 p = call("/api/project-setup")
                 self.assertEqual([x["name"] for x in p["config"]["drives"]], ["Colour-3-Raid", "Colour-9-Raid"])
                 self.assertIn("can_choose_folder", p)

@@ -473,7 +473,7 @@ class MakeResolveProjectTests(unittest.TestCase):
 class NewProjectServiceTests(LibraryRig):
     """The service makes a new job's Resolve project before carrying on with backups."""
 
-    FIELDS = {"job_no": "WC105", "client": "WSM", "client_folder": "WSMLondon", "title": "Varley"}
+    FIELDS = {"job": "WC105_WSM_Varley", "client_folder": "WSMLondon"}
 
     def setUp(self):
         super().setUp()
@@ -543,6 +543,23 @@ class NewProjectServiceTests(LibraryRig):
         svc.request_run_now()
         svc._run_cycle()
         self.assertEqual(self.status.snapshot()["last_cycle"]["status"], "interrupted")
+
+    def test_stop_ends_the_running_check(self):
+        svc = None
+
+        def connect(c):
+            self.assertTrue(svc.request_stop_run())  # pressed while the check is running
+            return FakeResolve(self.pm)
+        svc = self.service(connect=connect)
+        self.fs.procs[42] = GUI
+        self.pm.db = {"DbType": "PostgreSQL", "DbName": dbname(A)}
+        for i in range(3):
+            self.pm.add(["Busy"], f"P{i}", "2026-10-01 10:00:00")
+        svc.request_run_now()
+        svc._run_cycle()
+        self.assertEqual(self.status.snapshot()["last_cycle"]["status"], "interrupted")
+        self.assertFalse(svc.request_stop_run())  # nothing running now
+        self.assertFalse(svc.paused)               # only that check was stopped
 
 
 class SafetyTests(Base):

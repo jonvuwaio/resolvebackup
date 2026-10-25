@@ -134,12 +134,40 @@ td small { display: block; color: var(--dim); }
 [hidden] { display: none !important; }
 .foot { margin-top: 28px; color: var(--dim); display: flex; gap: 6px 28px; flex-wrap: wrap; }
 
+/* ---------- app bar and the two pages ---------- */
+.appbar { display: flex; align-items: center; gap: 6px 22px; flex-wrap: wrap; padding: 12px 32px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.appbar .brand { font-weight: 600; margin-right: 6px; }
+.appbar nav { display: flex; gap: 4px; }
+.appbar nav a { color: var(--dim); text-decoration: none; padding: 5px 12px; border-radius: 4px; }
+.appbar nav a:hover { color: var(--text); }
+.appbar nav a[aria-current="page"] { background: var(--raised); color: var(--text); }
+.bk-pill { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--dim); text-decoration: none; font-size: 13px; }
+.bk-pill:hover { color: var(--text); }
+.bk-pill i { width: 9px; height: 9px; border-radius: 50%; background: var(--idle); flex: none; }
+.bk-pill i.run { animation: pulse 1.6s ease-in-out infinite; }
+body.pg-backups .bk-pill { display: none; }
+body.pg-projects #backupPage, body.pg-projects #drawer { display: none; }
+body.pg-projects #newDrawer { position: static; transform: none; visibility: visible; width: auto; max-width: 760px; margin: 0 auto;
+  background: transparent; border: 0; display: block; transition: none; }
+body.pg-projects #newDrawer header { padding: 26px 24px 0; }
+body.pg-projects #newDrawer header h2 { font-size: 24px; font-weight: 500; }
+body.pg-projects #newDrawer form { overflow: visible; }
+body.pg-projects #newDrawer footer { position: sticky; bottom: 0; background: var(--bg); }
+body.pg-backups #newDrawer, body.pg-backups #recentJobs { display: none; }
+#recentJobs { max-width: 760px; margin: 0 auto; padding: 8px 24px 56px; }
+#recentJobs h2 { font-size: 15px; font-weight: 600; margin: 24px 0 6px; }
+#recentJobs ul { margin: 0; padding: 0; list-style: none; }
+#recentJobs li { padding: 9px 0; border-top: 1px solid var(--line-soft); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 16px; }
+#recentJobs li small { grid-column: 1 / -1; color: var(--dim); overflow-wrap: anywhere; }
+#recentJobs li .when { color: var(--dim); font-size: 12.5px; white-space: nowrap; }
+#recentJobs a { color: inherit; }
+@media (max-width: 900px) { .appbar { padding: 10px 16px; } }
+
 /* ---------- settings drawer ---------- */
 #scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .18s; }
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100%); background: var(--panel); border-left: 1px solid var(--line); transform: translateX(100%); transition: transform .2s ease; display: flex; flex-direction: column; visibility: hidden; }
-#newDrawer { width: min(620px, 100%); }
-body.open #scrim, body.open-new #scrim { opacity: 1; pointer-events: auto; }
-body.open #drawer, body.open-new #newDrawer { transform: none; visibility: visible; }
+body.open #scrim { opacity: 1; pointer-events: auto; }
+body.open #drawer { transform: none; visibility: visible; }
 @media (prefers-reduced-motion: reduce) { .drawer, #scrim { transition: none; } }
 .drawer header { padding: 20px 24px 12px; display: flex; justify-content: space-between; align-items: center; }
 .drawer h2 { margin: 0; font-size: 18px; font-weight: 600; }
@@ -212,15 +240,20 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
-<div class="wrap">
+<header class="appbar">
+  <span class="brand">Colour Project Manager</span>
+  <nav aria-label="Pages"><a id="navProjects" href="/">Projects</a><a id="navBackups" href="/backups">Backups</a></nav>
+  <a class="bk-pill" id="bkPill" href="/backups"><i id="bkDot"></i><span id="bkText">Backups: connecting</span></a>
+</header>
+<div class="wrap" id="backupPage">
   <div class="top">
     <div>
       <div class="state"><span class="dot" id="dot"></span><h1 id="stateText">Connecting</h1></div>
       <p class="sub" id="sub"></p>
     </div>
     <div class="actions">
-      <button class="btn" id="openNew">New project</button>
       <button class="btn primary" id="runNow">Back up now</button>
+      <button class="btn" id="stopRun" hidden>Stop</button>
       <button class="btn" id="pause">Pause</button>
       <button class="btn" id="openSettings">Settings</button>
     </div>
@@ -361,8 +394,8 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   <footer><span id="saveMsg" class="msg-line" role="status"></span><button class="btn primary" id="save" disabled>Save settings</button></footer>
 </aside>
 
-<aside id="newDrawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="newH" aria-hidden="true">
-  <header><h2 id="newH">New project</h2><button class="btn" id="closeNew">Close</button></header>
+<main id="newDrawer" class="drawer" aria-labelledby="newH">
+  <header><h2 id="newH">New project</h2></header>
   <form id="npForm" autocomplete="off">
     <p class="banner" id="npProblem" hidden></p>
     <div class="f"><label for="npDrive">Project drive</label>
@@ -382,21 +415,14 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
           <div class="err" data-aderr="path"></div><div class="err" data-aderr="name"></div><div class="err" data-aderr="template"></div></div>
         <div class="row" style="margin-top:12px;display:flex;gap:8px"><button type="button" class="btn primary" id="adSave">Add drive</button><button type="button" class="btn" id="adCancel">Cancel</button><span class="msg-line" id="adMsg"></span></div>
       </div></div>
-    <div class="f"><label for="npJobNo">Job number</label>
-      <div class="row num-row"><input type="text" id="npJobNo" spellcheck="false" style="flex:none;width:9em"><span id="npJobNoHint"></span></div>
-      <div class="err" data-nperr="job_no"></div></div>
     <div class="f"><label for="npClientFolder">Client folder</label>
       <input type="text" id="npClientFolder" list="npClients" spellcheck="false"><datalist id="npClients"></datalist>
-      <div class="hint">Pick an existing client or type a new one.</div>
+      <div class="hint" id="npClientHint">Pick an existing client or type a new one.</div>
       <div class="err" data-nperr="client_folder"></div></div>
-    <div class="f"><label for="npClient">Client in the job name</label>
-      <input type="text" id="npClient" spellcheck="false">
-      <div class="hint" id="npClientHint">Usually the same as the folder.</div>
-      <div class="err" data-nperr="client"></div></div>
-    <div class="f"><label for="npTitle">Job title</label>
-      <input type="text" id="npTitle" spellcheck="false" placeholder="For example Plusnet_Plusso">
-      <div class="err" data-nperr="title"></div></div>
-    <p class="jobname empty" id="npJob">Job name appears here</p>
+    <div class="f"><label for="npJobName">Job name</label>
+      <input type="text" id="npJobName" spellcheck="false" placeholder="For example WC105_WSM_Varley_Spring26">
+      <div class="hint" id="npJobHint"></div>
+      <div class="err" data-nperr="job"></div></div>
     <ul class="warns" id="npWarn"></ul>
     <div class="f"><span class="lab">This job gets</span><ul class="where" id="npWhere"></ul></div>
     <p class="soon" id="npSoon" hidden>Frame.io isn't set up yet, so it isn't part of the job. Set it up under Templates and locations.</p>
@@ -447,7 +473,11 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     </details>
   </form>
   <footer><span id="npMsg" class="msg-line" role="status"></span><button class="btn primary" id="npCreate" disabled>Create project</button></footer>
-</aside>
+</main>
+<section id="recentJobs" aria-labelledby="recentH" hidden>
+  <h2 id="recentH">Recent jobs</h2>
+  <ul id="recentList"></ul>
+</section>
 
 <script>
 (() => {
@@ -455,6 +485,12 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   const $ = (id) => document.getElementById(id);
   const TOKEN = new URLSearchParams(location.search).get("t") || sessionStorage.getItem("rcbToken") || "";
   try { sessionStorage.setItem("rcbToken", TOKEN); } catch (e) { /* private mode */ }
+  const PAGE = location.pathname.startsWith("/backups") ? "backups" : "projects";
+  document.body.classList.add("pg-" + PAGE);
+  for (const [id, path] of [["navProjects", "/"], ["navBackups", "/backups"], ["bkPill", "/backups"]]) {
+    const a = document.getElementById(id); a.href = path + "?t=" + encodeURIComponent(TOKEN);
+    if (id !== "bkPill" && (path === "/") === (PAGE === "projects")) a.setAttribute("aria-current", "page");
+  }
 
   const S = { status: null, lib: null, events: [], seq: 0, offline: false, denied: false,
               hours: 24, filter: "all", q: "", problems: false, sort: { k: "last_backup", dir: -1 }, libSig: "" };
@@ -539,7 +575,9 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     $("stateText").textContent = v.text;
     $("dot").style.background = v.color;
     $("dot").classList.toggle("run", v.key === "run");
-    document.title = `${v.text} · Colour Project Manager`;
+    document.title = PAGE === "backups" ? `${v.text} · Backups` : "Projects · Colour Project Manager";
+    $("bkDot").style.background = v.color; $("bkDot").classList.toggle("run", v.key === "run");
+    $("bkText").textContent = S.offline ? "Backups: service not reachable" : `Backups: ${v.text.toLowerCase()}`;
     $("icon").href = "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="${v.color.startsWith("var") ? getComputedStyle(document.documentElement).getPropertyValue(v.color.slice(4, -1)).trim() : v.color}"/></svg>`);
     const sub = $("sub"); sub.replaceChildren();
     if (s && s.resolve && s.resolve.connected) {
@@ -551,6 +589,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     } else if (s) sub.append(h("span", {}, "DaVinci Resolve isn't connected"));
     const running = s && s.state === "running";
     $("runNow").disabled = !s || S.offline || running;
+    $("stopRun").hidden = !running; $("stopRun").disabled = S.offline;
     $("pause").disabled = !s || S.offline;
     $("pause").textContent = s && s.paused ? "Resume" : "Pause";
 
@@ -758,6 +797,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
 
   // ---------- controls ----------
   $("runNow").addEventListener("click", async () => { $("runNow").disabled = true; try { await api("/api/run-now", {}); } catch (e) { /* status shows */ } });
+  $("stopRun").addEventListener("click", async () => { $("stopRun").disabled = true; try { await api("/api/stop-run", {}); } catch (e) { /* status shows */ } });
   $("pause").addEventListener("click", async () => { try { await api("/api/pause", { paused: !(S.status && S.status.paused) }); } catch (e) { /* shown by status */ } });
   $("range").addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (!b) return; S.hours = +b.dataset.w; for (const x of $("range").children) x.setAttribute("aria-pressed", String(x === b)); renderTimeline(); });
   $("onlyProblems").addEventListener("change", (ev) => { S.problems = ev.target.checked; renderFeed(); });
@@ -848,8 +888,9 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   const STATUS_WORD = { ready: "Ready", waiting: "Waiting for the job details", exists: "Already exists",
                         drive_missing: "Drive not connected", template_missing: "Template missing", not_writable: "Can't write here",
                         not_connected: "Frame.io not connected", not_set_up: "Workspace not chosen", unreachable: "Frame.io didn't answer" };
-  const npFields = () => ({ job_no: $("npJobNo").value.trim(), client_folder: $("npClientFolder").value.trim(),
-                            client: $("npClient").value.trim(), title: $("npTitle").value.trim() });
+  const npFields = () => ({ job: $("npJobName").value.trim(), client_folder: $("npClientFolder").value.trim() });
+  // the job name starts with the next free number; picking a client fills in its usual name after it
+  const JOB_START = /^([A-Z]{1,3}\d{3,5})_(?:([A-Za-z0-9-]*)_)?$/;
   const treeText = (paths) => paths.slice().sort().map((x) => { const parts = x.split("/"); return "    ".repeat(parts.length - 1) + parts[parts.length - 1]; }).join("\n");
 
   async function loadSetup() {
@@ -862,8 +903,8 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     NP.drive = idx; sel.value = idx == null ? ADD : String(idx);
     if (idx == null) openAddDrive(); else $("addDrive").hidden = true;
     $("npClients").replaceChildren(...d.clients.map((x) => h("option", { value: x.folder })));
-    if (!$("npJobNo").value && d.next_job_no) $("npJobNo").value = d.next_job_no;
-    $("npJobNoHint").textContent = d.next_job_no ? `Next free number is ${d.next_job_no}` : "";
+    if (!$("npJobName").value && d.next_job_no) $("npJobName").value = d.next_job_no + "_";
+    $("npJobHint").textContent = (d.next_job_no ? `Next free number is ${d.next_job_no}. ` : "") + "Number, client and title, joined with underscores.";
     $("npProblem").hidden = !d.templates_problem; $("npProblem").textContent = d.templates_problem || "";
     $("edChooseTemplates").hidden = !d.can_choose_folder;
     $("npSoon").hidden = !!(c.frameio && c.frameio.enabled);
@@ -886,7 +927,6 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     const p = NP.plan; if (!p) return;
     for (const e of document.querySelectorAll("[data-nperr]")) { const k = e.dataset.nperr; e.textContent = (NP.showAll || NP.touched.has(k)) ? (p.errors[k] || "") : ""; }
     const ok = !Object.keys(p.errors).length;
-    $("npJob").textContent = p.job || "Job name appears here"; $("npJob").classList.toggle("empty", !ok);
     $("npWarn").replaceChildren(...p.warnings.map((w) => h("li", {}, w)));
     const tpl = (NP.data && NP.data.templates) || {};
     $("npWhere").replaceChildren(...p.locations.map((r) => {
@@ -920,19 +960,19 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   }
   function npInput(ev) {
     const id = ev.target.id;
-    if (id === "npTitle") { const v = ev.target.value, n = v.replace(/\s+/g, "_"); if (n !== v) ev.target.value = n; }
-    if (id === "npClient") NP.clientTouched = !!ev.target.value.trim();
+    if (id === "npJobName") { const v = ev.target.value, n = v.replace(/\s+/g, "_"); if (n !== v) ev.target.value = n; }
     if (id === "npClientFolder") {
       const f = ev.target.value.trim(), c = NP.data && NP.data.clients.find((x) => x.folder === f);
-      if (!NP.clientTouched) $("npClient").value = c && c.client ? c.client : f.replace(/[^A-Za-z0-9-]/g, "");
-      $("npClientHint").textContent = c && c.last_job ? `Last job: ${c.last_job}` : "Usually the same as the folder.";
+      $("npClientHint").textContent = c && c.last_job ? `Last job: ${c.last_job}` : "Pick an existing client or type a new one.";
+      const m = $("npJobName").value.match(JOB_START), name = c && c.client ? c.client : f.replace(/[^A-Za-z0-9-]/g, "");
+      if (m) $("npJobName").value = `${m[1]}_${name ? name + "_" : ""}`;
     }
-    if (["npJobNo", "npClientFolder", "npClient", "npTitle"].includes(id)) { clearDone(); schedulePreview(); }
+    if (["npJobName", "npClientFolder"].includes(id)) { clearDone(); schedulePreview(); }
   }
   $("npForm").addEventListener("input", npInput);
   $("npForm").addEventListener("submit", (ev) => ev.preventDefault());
   $("npForm").addEventListener("focusout", (ev) => {
-    const k = { npJobNo: "job_no", npClientFolder: "client_folder", npClient: "client", npTitle: "title" }[ev.target.id];
+    const k = { npJobName: "job", npClientFolder: "client_folder" }[ev.target.id];
     if (k && ev.target.value.trim()) { NP.touched.add(k); renderPlan(); }
   });
   $("npDrive").addEventListener("change", (ev) => {
@@ -1147,8 +1187,8 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   $("npCreate").addEventListener("click", async () => {
     const msg = $("npMsg");
     if (NP.done) {  // start another
-      for (const id of ["npJobNo", "npClientFolder", "npClient", "npTitle"]) $(id).value = "";
-      NP.clientTouched = false; NP.touched.clear(); NP.showAll = false; NP.jobId = null; clearDone();
+      for (const id of ["npJobName", "npClientFolder"]) $(id).value = "";
+      NP.touched.clear(); NP.showAll = false; NP.jobId = null; clearDone();
       await loadSetup(); preview(); $("npClientFolder").focus(); return;
     }
     NP.showAll = true; renderPlan();
@@ -1167,6 +1207,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
         msg.textContent = !folderOk ? "Nothing was made. See below." : r.resolve && r.resolve.state === "queued" ? "Folders made. Making the Resolve project." : `${r.job} is set up.`;
         if (r.resolve) renderJob(r.resolve);
         $("npCreate").textContent = "Start another";
+        api("/api/project-setup").then((d) => { NP.data.recent = d.recent; renderRecent(); }).catch(() => {});
         $("npResults").scrollIntoView({ block: "nearest" });
       } else { msg.className = "msg-line bad"; msg.textContent = r.error || "Nothing was created."; }
     } catch (e) { msg.className = "msg-line bad"; msg.textContent = "Couldn't reach the backup service. Nothing was created."; }
@@ -1196,6 +1237,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
       const d = await api("/api/project-setup");
       const it = d.recent.find((x) => x.id === NP.jobId);
       if (it && it.resolve) renderJob(it.resolve);
+      NP.data.recent = d.recent; renderRecent();
     } catch (e) { setTimeout(pollJob, 3000); }
   }
   $("npResults").addEventListener("click", async (ev) => {
@@ -1206,32 +1248,37 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   });
 
   // open / close
-  async function openNew() {
-    if (document.body.classList.contains("open")) closeSettings();
-    NP.opener = document.activeElement;
-    try { await loadSetup(); } catch (e) { return; }
-    document.body.classList.add("open-new"); $("newDrawer").setAttribute("aria-hidden", "false");
-    preview();
+  async function showProjects() {
+    try { await loadSetup(); } catch (e) { $("npMsg").className = "msg-line bad"; $("npMsg").textContent = "Couldn't reach the service. Reload the page to try again."; return; }
+    preview(); renderRecent();
     (NP.drive == null ? $("adVol") : $("npClientFolder")).focus();
-    if (location.hash !== "#new") history.replaceState(null, "", location.pathname + location.search + "#new");
   }
-  function closeNew() {
-    document.body.classList.remove("open-new"); $("newDrawer").setAttribute("aria-hidden", "true");
-    history.replaceState(null, "", location.pathname + location.search);
-    if (NP.opener) NP.opener.focus();
+  // jobs made recently, newest first
+  const RV_WORD = { queued: "Resolve project waiting", running: "Resolve project being made", done: "Resolve project made",
+                    exists: "Resolve project already there", failed: "Resolve project not made" };
+  function renderRecent() {
+    const items = ((NP.data && NP.data.recent) || []).filter((x) => (x.locations || []).some((l) => l.ok) || (x.resolve && x.resolve.state));
+    $("recentJobs").hidden = !items.length;
+    $("recentList").replaceChildren(...items.map((it) => {
+      const locs = it.locations || [], fio = locs.find((l) => l.kind === "frameio" && l.ok), drive = locs.find((l) => l.kind === "drive");
+      const ok = locs.every((l) => l.ok);
+      const parts = [ok ? "Made" : "Not made"];
+      if (drive) parts.push(drive.name);
+      if (it.resolve && it.resolve.state) parts.push(RV_WORD[it.resolve.state] || it.resolve.state);
+      return h("li", {}, h("span", { class: "name" }, it.job), h("span", { class: "when" }, fmtWhen(it.at)),
+        h("small", {}, parts.join(" · "), fio && fio.url ? [" · ", h("a", { href: fio.url, target: "_blank", rel: "noopener" }, "Frame.io")] : null));
+    }));
   }
-  $("openNew").addEventListener("click", openNew);
-  $("closeNew").addEventListener("click", closeNew);
-  $("scrim").addEventListener("click", () => { if (document.body.classList.contains("open-new")) closeNew(); });
-  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && document.body.classList.contains("open-new")) closeNew(); });
-  addEventListener("hashchange", () => { if (location.hash === "#new") openNew(); });
+  const fmtWhen = (s) => { const d = date(s); return d ? d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : ""; };
 
   // ---------- go ----------
   renderTimeline(); renderRows(); renderFeed();
   setInterval(() => { renderNow(); tickClock(); }, 1000);
   setInterval(renderTimeline, 15000);
-  pollStatus(); pollLibrary(true);
-  if (location.hash === "#new") openNew();
+  pollStatus();
+  if (PAGE === "projects") showProjects();
+  else if (location.hash === "#new") location.replace("/?t=" + encodeURIComponent(TOKEN));  // old New project links
+  else pollLibrary(true);
 })();
 </script>
 </body>

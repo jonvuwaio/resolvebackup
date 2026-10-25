@@ -28,14 +28,16 @@ Files are written to a temporary name and renamed only when complete, so a crash
 ## See it working live
 
 - **Dashboard:** the service runs a small web page on your own machine only (`127.0.0.1`, never the network).
-  It shows a timeline of every check with a live playhead, what is being exported right now and how far through
+  It has two pages: **Projects** (the start page: set up a new job, and the jobs made recently) and **Backups**.
+  The bar at the top of every page shows whether backups are running. The Backups page shows a timeline of every check with a live playhead, what is being exported right now and how far through
   the library it is, an activity feed, every project's backup status, and a **Settings** drawer (backup folder,
   interval, active hours, include/exclude, retention) that saves straight to `config.json`.
   Open it with `python3 resolve_cloud_backup.py dashboard` (prints the address) or from the menu bar icon.
   The address contains a private access token, so other websites and other users on the machine can't use it.
 - **macOS menu bar icon:** a coloured dot: green up to date, blue backing up, amber waiting for Resolve,
-  red something failed, grey paused or the service isn't running. Click it for the status line, *Open dashboard*,
-  *Back up now*, *Pause backups*, *Open backup folder* and *Open log*. You get a notification when a check
+  red something failed, grey paused or the service isn't running. Click it for the status line, *New project…*
+  (the Projects page), *Backups…* (the Backups page), *Back up now*, *Stop this backup* (ends the check that's
+  running, after the current project; the next one runs as usual), *Pause backups*, *Open backup folder* and *Open log*. You get a notification when a check
   finishes with a failure. Quitting the icon never stops backups.
 
 ## Requirements
@@ -215,7 +217,7 @@ about 80 seconds hidden against about 17 minutes through an open Resolve.
 
 ## New project set-up
 
-**New project** (dashboard header, or **New project…** in the menu bar) sets up a job in one go. Every job gets
+**New project** (the Projects page, or **New project…** in the menu bar) sets up a job in one go. Every job gets
 all of these, named after the job: its working folders on the workstation's RAID
 (`Projects/<Client>/<Job>`, from the `Project` template), its deliverables folders on the deliverables drive
 (`Deliverables/Projects/<Job>`, from the `Deliverables` template; exports only, never working projects) and its
@@ -224,10 +226,10 @@ DaVinci Resolve project with the bins, and its Frame.io project with the review 
 1. Pick the **project drive**: the RAID of the workstation the job is on. **Add a drive…** at the bottom of the
    list offers every connected drive that isn't set up yet, already filled in as `Projects/<Client>/<Job>` with
    the `Project` template (change either for a drive that's laid out differently).
-2. Fill in the **job number** (the next free one is suggested, from every drive and every backed-up project),
-   the **client folder** (pick an existing one or type a new one), the **client as it appears in the job name**
-   (filled in from that client's last job) and the **job title**. Spaces in the title become underscores.
-   The job name, for example `WC105_WSM_Varley_Spring26`, and every path are previewed live.
+2. Fill in the **client folder** (pick an existing one or type a new one) and the **job name**, for example
+   `WC105_WSM_Varley_Spring26`: number, client and title joined with underscores. It starts with the next free
+   number (from every drive and every backed-up project), and picking a client adds the name that client's last
+   job used. Spaces become underscores. Every path is previewed live.
 3. Check the list of what the job gets and press **Create project**. It's all or nothing: Create stays off until
    every part can be made (a drive that isn't connected blocks it), and if one part fails, what that attempt made
    elsewhere is taken back. A part that already exists is left alone, so a job missing one part can be finished.
@@ -306,7 +308,7 @@ Manager → *Import Project*, and pick the newest `.drp` from the project's back
 python3 -m unittest discover -s tests -v
 ```
 
-The 185 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
+The 187 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
 collaboration scenarios, backoff and alerts, `probe`, database switching, retention, caps, filters) plus the
 scheduler, the hidden-Resolve hand-over (with faked processes), the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, the installer, and new project set-up (templates, previews, creating and rolling back folders, and its dashboard API).
 

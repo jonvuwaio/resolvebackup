@@ -148,6 +148,13 @@ class IconTests(unittest.TestCase):
                              <= set(mb.COLOURS), True)
 
 
+class PageUrlTests(unittest.TestCase):
+    def test_pages_keep_the_token(self):
+        url = "http://127.0.0.1:8765/?t=abc"
+        self.assertEqual(mb.page_url(url, "/backups"), "http://127.0.0.1:8765/backups?t=abc")
+        self.assertEqual(mb.page_url(url + "#x", "/"), "http://127.0.0.1:8765/?t=abc")
+
+
 class ClientTests(unittest.TestCase):
     def test_missing_service_json_is_offline(self):
         with tempfile.TemporaryDirectory() as d:

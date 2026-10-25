@@ -62,7 +62,7 @@ import frameio
 import project_setup
 
 APP = "resolve-cloud-backup"
-VERSION = "1.13.0"
+VERSION = "1.14.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -1538,6 +1538,8 @@ class Service:
         self.wake = threading.Event()
         self._lock = threading.Lock()
         self._run_now = False
+        self._cancel_run = threading.Event()  # "Stop" for the check that's running
+        self._in_cycle = False
         self.paused = False
         self.next_run = wall()  # first cycle straight away
         self.hidden_factory = hidden_factory or (lambda cfg: HiddenResolve(cfg, connect=connect))
@@ -1579,6 +1581,14 @@ class Service:
             self._run_now = True
         log.info("Back up now requested")
         self.wake.set()
+        return True
+
+    def request_stop_run(self) -> bool:
+        """Stop the backup check that's running, between projects. The next one runs as scheduled."""
+        if not self._in_cycle:
+            return False
+        self._cancel_run.set()
+        log.info("Stop requested: this backup check ends after the current project")
         return True
 
     def set_paused(self, paused: bool) -> None:
@@ -1680,16 +1690,20 @@ class Service:
             log.info("Another backup cycle is running; will check again shortly")
             self.next_run = self.wall() + 60
             return
+        self._cancel_run.clear()
+        self._in_cycle = True
         hidden = None
         try:
             hidden = self._hidden_session()
             if hidden:
                 status = self.backup.cycle(
                     connect=lambda cfg: hidden.connect(cfg, lambda: self.stopping),
-                    interrupted=lambda: self.stopping or hidden.wanted() or self.setup.has_pending(), hidden=True,
+                    interrupted=lambda: self.stopping or hidden.wanted() or self.setup.has_pending()
+                    or self._cancel_run.is_set(), hidden=True,
                     expect_db=hidden.library)["status"]
             else:
-                status = self.backup.cycle(interrupted=lambda: self.stopping or self.setup.has_pending())["status"]
+                status = self.backup.cycle(interrupted=lambda: self.stopping or self.setup.has_pending()
+                                           or self._cancel_run.is_set())["status"]
         except Exception:  # noqa: BLE001
             log.exception("Unexpected error in backup cycle")
             status = "error"
@@ -1701,6 +1715,7 @@ class Service:
                     self.status.set(resolve={"connected": False})
             except Exception:  # noqa: BLE001
                 log.exception("Could not quit the hidden DaVinci Resolve")
+            self._in_cycle = False
             lock.release()
         retry = status in ("resolve_unavailable", "error", "no_project_manager", "backup_dir_unavailable")
         wait = self.cfg["retry_minutes"] * 60 if retry else self._wait_after_cycle()
@@ -2036,7 +2051,7 @@ def _make_handler(dash: DashboardServer):
                 if not auth:
                     return
                 path, qs = auth
-                if path == "/":
+                if path in ("/", "/backups"):
                     csp = ("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
                            "connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'")
                     self._send(200, dash.html_path.read_bytes(), "text/html; charset=utf-8",
@@ -2093,7 +2108,9 @@ def _make_handler(dash: DashboardServer):
                     return
                 path = auth[0]
                 svc = dash.svc
-                if path == "/api/run-now":
+                if path == "/api/stop-run":
+                    self._send(200, {"ok": svc.request_stop_run()})
+                elif path == "/api/run-now":
                     self._send(200, {"ok": svc.request_run_now(), "running": svc.status.get("state") == "running"})
                 elif path == "/api/choose-folder":
                     start = body.get("start")

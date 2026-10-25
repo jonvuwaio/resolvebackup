@@ -23,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.error
 import urllib.request
 import webbrowser
@@ -76,6 +77,12 @@ def _hm(ts) -> str:
 
 def plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def page_url(dashboard_url: str, path: str) -> str:
+    """The dashboard's address (with its access token) for one of its pages: / for projects, /backups."""
+    u = urllib.parse.urlsplit(dashboard_url)
+    return urllib.parse.urlunsplit((u.scheme, u.netloc, path, u.query, ""))
 
 
 def summarize(status: dict | None, offline: bool = False, denied: bool = False) -> dict:
@@ -353,9 +360,10 @@ def run_app(runner=None, first_run: bool = False) -> int:
             self.shown = None
             self.m_title = rumps.MenuItem("Starting")
             self.m_detail = rumps.MenuItem("")
-            self.m_dash = rumps.MenuItem("Open dashboard", callback=self.open_dashboard)
+            self.m_dash = rumps.MenuItem("Backups…", callback=self.open_dashboard)
             self.m_new = rumps.MenuItem("New project…", callback=self.new_project)
             self.m_run = rumps.MenuItem("Back up now", callback=self.run_now)
+            self.m_stop = rumps.MenuItem("Stop this backup", callback=None)
             self.m_pause = rumps.MenuItem("Pause backups", callback=self.toggle_pause)
             self.m_start = rumps.MenuItem("Start backup service", callback=self.start)
             self.m_login = rumps.MenuItem("Open at login", callback=self.toggle_login)
@@ -364,7 +372,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
             self.m_log = rumps.MenuItem("Open log", callback=self.open_log)
             self.m_quit = rumps.MenuItem("Quit Colour Project Manager" if embedded else "Quit menu bar icon",
                                          callback=self.quit)
-            top = [self.m_title, self.m_detail, None, self.m_new, self.m_dash, self.m_run, self.m_pause]
+            top = [self.m_title, self.m_detail, None, self.m_new, self.m_dash, None, self.m_run, self.m_stop, self.m_pause]
             if not embedded:
                 top.append(self.m_start)
             self.menu = top + [None, self.m_folder, self.m_log] + ([self.m_login] if embedded else []) + [None, self.m_quit]
@@ -394,6 +402,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
                 self.m_title.title = s["title"]
                 self.m_detail.title = s["detail"] or " "
                 self.m_run.set_callback(self.run_now if s["can_run"] else None)
+                self.m_stop.set_callback(self.stop_run if s["running"] else None)
                 self.m_pause.set_callback(self.toggle_pause if s["can_pause"] else None)
                 self.m_pause.title = "Resume backups" if s["paused"] else "Pause backups"
                 self.m_start.set_callback(self.start if s["key"] in ("off", "denied") else None)
@@ -424,12 +433,18 @@ def run_app(runner=None, first_run: bool = False) -> int:
         def open_dashboard(self, _):
             url = client.dashboard_url()
             if url:
-                webbrowser.open(url)
+                webbrowser.open(page_url(url, "/backups"))
 
         def new_project(self, _):
             url = client.dashboard_url()
             if url:
-                webbrowser.open(url + "#new")
+                webbrowser.open(page_url(url, "/"))
+
+        def stop_run(self, _):
+            try:
+                client.post("/api/stop-run")
+            except Exception:  # noqa: BLE001
+                pass
 
         def run_now(self, _):
             try:
