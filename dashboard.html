@@ -145,17 +145,16 @@ td small { display: block; color: var(--dim); }
 .bk-pill:hover { color: var(--text); }
 .bk-pill i { width: 9px; height: 9px; border-radius: 50%; background: var(--idle); flex: none; }
 .bk-pill i.run { animation: pulse 1.6s ease-in-out infinite; }
-body.pg-backups .bk-pill { display: none; }
-body.pg-projects #backupPage, body.pg-projects #drawer { display: none; }
-body.pg-projects #newDrawer { position: static; transform: none; visibility: visible; width: auto; max-width: 760px; margin: 0 auto;
+body.pg-backups .bk-pill, body.pg-home .bk-pill { display: none; }
+body.pg-new #backupPage, body.pg-new #drawer, body.pg-home #backupPage, body.pg-home #drawer, body.pg-home #newDrawer { display: none; }
+body:not(.pg-home) #homePage { display: none; }
+body.pg-new #newDrawer { position: static; transform: none; visibility: visible; width: auto; max-width: 760px; margin: 0 auto;
   background: transparent; border: 0; display: block; transition: none; }
-body.pg-projects #newDrawer header { padding: 26px 24px 0; }
-body.pg-projects #newDrawer header h2 { font-size: 24px; font-weight: 500; }
-body.pg-projects #newDrawer form { overflow: visible; }
-body.pg-projects #newDrawer footer { position: sticky; bottom: 0; background: var(--bg); }
-body.pg-backups #newDrawer, body.pg-backups #recentJobs { display: none; }
-#drivesPanel { max-width: 1100px; margin: 0 auto; padding: 24px 24px 0; }
-#drivesPanel h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; }
+body.pg-new #newDrawer header { padding: 26px 24px 0; }
+body.pg-new #newDrawer header h2 { font-size: 24px; font-weight: 500; }
+body.pg-new #newDrawer form { overflow: visible; }
+body.pg-new #newDrawer footer { position: sticky; bottom: 0; background: var(--bg); }
+body.pg-backups #newDrawer { display: none; }
 .drive-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
 .drive { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; min-width: 0; }
 .drive .dn { font-weight: 500; overflow-wrap: anywhere; }
@@ -167,9 +166,17 @@ body.pg-backups #newDrawer, body.pg-backups #recentJobs { display: none; }
 .drive.low .df { color: var(--wait); } .drive.full .df { color: var(--bad); }
 .drive.off { opacity: .6; } .drive.off .df { color: var(--wait); }
 .drive small { display: block; color: var(--faint); font-size: 11.5px; margin-top: 2px; }
-body.pg-backups #drivesPanel { display: none; }
-#recentJobs { max-width: 760px; margin: 0 auto; padding: 8px 24px 56px; }
-#recentJobs h2 { font-size: 15px; font-weight: 600; margin: 24px 0 6px; }
+#homePage { max-width: 1100px; margin: 0 auto; padding: 28px 24px 56px; }
+#homePage h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; }
+.home-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 16px 18px; min-width: 0; }
+.card .big { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 500; margin: 2px 0 4px; }
+.card .big .dot { width: 11px; height: 11px; }
+.card p { margin: 0; color: var(--dim); overflow-wrap: anywhere; }
+.card .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.card a.btn { text-decoration: none; display: inline-block; color: var(--text); }
+.card a.btn.primary { color: var(--on-accent); }
+#homePage section { margin-top: 30px; }
 #recentJobs ul { margin: 0; padding: 0; list-style: none; }
 #recentJobs li { padding: 9px 0; border-top: 1px solid var(--line-soft); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 16px; }
 #recentJobs li small { grid-column: 1 / -1; color: var(--dim); overflow-wrap: anywhere; }
@@ -258,7 +265,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
 <body>
 <header class="appbar">
   <span class="brand">Colour Project Manager</span>
-  <nav aria-label="Pages"><a id="navProjects" href="/">Projects</a><a id="navBackups" href="/backups">Backups</a></nav>
+  <nav aria-label="Pages"><a id="navHome" href="/">Home</a><a id="navNew" href="/new">New project</a><a id="navBackups" href="/backups">Backups</a></nav>
   <a class="bk-pill" id="bkPill" href="/backups"><i id="bkDot"></i><span id="bkText">Backups: connecting</span></a>
 </header>
 <div class="wrap" id="backupPage">
@@ -410,10 +417,29 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   <footer><span id="saveMsg" class="msg-line" role="status"></span><button class="btn primary" id="save" disabled>Save settings</button></footer>
 </aside>
 
+<div id="homePage">
+  <div class="home-cards">
+    <div class="card">
+      <h2>Backups</h2>
+      <div class="big"><span class="dot" id="hDot"></span><span id="hState">Connecting</span></div>
+      <p id="hMain"></p><p id="hSub"></p>
+      <div class="acts"><button class="btn primary" id="hRun">Back up now</button><button class="btn" id="hStop" hidden>Stop</button><button class="btn" id="hPause">Pause</button><a class="btn" id="hBackups" href="/backups">Open Backups</a></div>
+    </div>
+    <div class="card">
+      <h2>New project</h2>
+      <p id="hJobs">Set up a job's folders on its RAID and Deliverables, its DaVinci Resolve project and its Frame.io project.</p>
+      <div class="acts"><a class="btn primary" id="hNew" href="/new">New project</a></div>
+    </div>
+  </div>
 <section id="drivesPanel" aria-labelledby="drivesH" hidden>
   <h2 id="drivesH">Drives</h2>
   <div class="drive-grid" id="drivesGrid"></div>
 </section>
+<section id="recentJobs" aria-labelledby="recentH" hidden>
+  <h2 id="recentH">Recent jobs</h2>
+  <ul id="recentList"></ul>
+</section>
+</div>
 <main id="newDrawer" class="drawer" aria-labelledby="newH">
   <header><h2 id="newH">New project</h2></header>
   <form id="npForm" autocomplete="off">
@@ -508,10 +534,6 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   </form>
   <footer><span id="npMsg" class="msg-line" role="status"></span><button class="btn primary" id="npCreate" disabled>Create project</button></footer>
 </main>
-<section id="recentJobs" aria-labelledby="recentH" hidden>
-  <h2 id="recentH">Recent jobs</h2>
-  <ul id="recentList"></ul>
-</section>
 
 <script>
 (() => {
@@ -519,11 +541,14 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   const $ = (id) => document.getElementById(id);
   const TOKEN = new URLSearchParams(location.search).get("t") || sessionStorage.getItem("rcbToken") || "";
   try { sessionStorage.setItem("rcbToken", TOKEN); } catch (e) { /* private mode */ }
-  const PAGE = location.pathname.startsWith("/backups") ? "backups" : "projects";
+  const PAGES = { "/": "home", "/new": "new", "/backups": "backups" };
+  const PAGE = PAGES[location.pathname.replace(/\/+$/, "") || "/"] || "home";
   document.body.classList.add("pg-" + PAGE);
-  for (const [id, path] of [["navProjects", "/"], ["navBackups", "/backups"], ["bkPill", "/backups"]]) {
-    const a = document.getElementById(id); a.href = path + "?t=" + encodeURIComponent(TOKEN);
-    if (id !== "bkPill" && (path === "/") === (PAGE === "projects")) a.setAttribute("aria-current", "page");
+  const link = (path) => path + "?t=" + encodeURIComponent(TOKEN);
+  for (const [id, path] of [["navHome", "/"], ["navNew", "/new"], ["navBackups", "/backups"], ["bkPill", "/backups"],
+                            ["hBackups", "/backups"], ["hNew", "/new"]]) {
+    const a = document.getElementById(id); a.href = link(path);
+    if (id.startsWith("nav") && PAGES[path] === PAGE) a.setAttribute("aria-current", "page");
   }
 
   const S = { status: null, lib: null, events: [], seq: 0, offline: false, denied: false,
@@ -609,7 +634,8 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     $("stateText").textContent = v.text;
     $("dot").style.background = v.color;
     $("dot").classList.toggle("run", v.key === "run");
-    document.title = PAGE === "backups" ? `${v.text} · Backups` : "Projects · Colour Project Manager";
+    document.title = PAGE === "backups" ? `${v.text} · Backups` : PAGE === "new" ? "New project · Colour Project Manager" : `${v.text} · Colour Project Manager`;
+    $("hDot").style.background = v.color; $("hDot").className = "dot" + (v.key === "run" ? " run" : ""); $("hState").textContent = S.offline ? "Service not reachable" : v.text;
     $("bkDot").style.background = v.color; $("bkDot").classList.toggle("run", v.key === "run");
     $("bkText").textContent = S.offline ? "Backups: service not reachable" : `Backups: ${v.text.toLowerCase()}`;
     $("icon").href = "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="${v.color.startsWith("var") ? getComputedStyle(document.documentElement).getPropertyValue(v.color.slice(4, -1)).trim() : v.color}"/></svg>`);
@@ -624,6 +650,8 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     const running = s && s.state === "running";
     $("runNow").disabled = !s || S.offline || running;
     $("stopRun").hidden = !running; $("stopRun").disabled = S.offline;
+    $("hRun").disabled = $("runNow").disabled; $("hStop").hidden = !running; $("hPause").disabled = $("pause").disabled;
+    $("hPause").textContent = s && s.paused ? "Resume" : "Pause";
     $("pause").disabled = !s || S.offline;
     $("pause").textContent = s && s.paused ? "Resume" : "Pause";
 
@@ -803,6 +831,12 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   }
 
   // ---------- polling ----------
+  // the home page's backup card repeats "Right now" from the Backups page
+  function renderHomeNow() {
+    if (PAGE !== "home") return;
+    const main = $("nowMain").textContent;
+    $("hMain").textContent = main === $("hState").textContent ? "" : main; $("hSub").textContent = $("nowSub").textContent;
+  }
   async function pollStatus() {
     let delay = document.hidden ? 4000 : 1000;
     try {
@@ -816,7 +850,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
       if ((d.last_cycle && d.last_cycle.at) !== prevAt) pollLibrary();
       if ((d.resolve && d.resolve.database) !== prevDb) renderLibraries();
     } catch (e) { if (e.status === 401) { S.denied = true; delay = 5000; } else S.offline = true; }
-    renderHeader(); renderNow(); tickClock();
+    renderHeader(); renderNow(); tickClock(); renderHomeNow();
     setTimeout(pollStatus, delay);
   }
   async function pollLibrary(loop) {
@@ -831,6 +865,9 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
 
   // ---------- controls ----------
   $("runNow").addEventListener("click", async () => { $("runNow").disabled = true; try { await api("/api/run-now", {}); } catch (e) { /* status shows */ } });
+  $("hRun").addEventListener("click", () => $("runNow").click());
+  $("hStop").addEventListener("click", () => $("stopRun").click());
+  $("hPause").addEventListener("click", () => $("pause").click());
   $("stopRun").addEventListener("click", async () => { $("stopRun").disabled = true; try { await api("/api/stop-run", {}); } catch (e) { /* status shows */ } });
   $("pause").addEventListener("click", async () => { try { await api("/api/pause", { paused: !(S.status && S.status.paused) }); } catch (e) { /* shown by status */ } });
   $("range").addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (!b) return; S.hours = +b.dataset.w; for (const x of $("range").children) x.setAttribute("aria-pressed", String(x === b)); renderTimeline(); });
@@ -1366,7 +1403,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
       $("drivesGrid").replaceChildren(...d.drives.map((x) => {
         const used = x.total ? (x.total - x.free) / x.total : null, freePct = x.total ? x.free / x.total : null;
         const cls = !x.connected || x.problem ? "off" : freePct < 0.05 ? "full" : freePct < 0.15 ? "low" : "";
-        const roles = x.roles.length ? x.roles.join(", ") : x.system ? "This Mac" : "";
+        const roles = x.roles.length ? x.roles.join(", ") : "";
         return h("div", { class: "drive " + cls, title: x.total ? `${bytes(x.total - x.free)} used of ${bytes(x.total)}` : "" },
           h("div", { class: "dn" }, x.name), h("div", { class: "dr" }, roles),
           h("div", { class: "meter" }, h("i", { style: `width:${used == null ? 0 : Math.round(used * 100)}%` })),
@@ -1376,8 +1413,20 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     } catch (e) { /* keep the last figures */ }
   }
 
-  async function showProjects() {
+  async function showHome() {
+    if (location.hash === "#new") { location.replace(link("/new")); return; }  // old New project links
     loadDrives(); setInterval(loadDrives, 60000);
+    const recent = async () => {
+      try {
+        NP.data = await api("/api/project-setup"); renderRecent();
+        const jl = NP.data.job_list || {}, todo = (jl.names || []).filter((x) => !x.done).length;
+        if (jl.configured && !jl.problem) $("hJobs").textContent = `${plural(todo, "job")} in the job list not set up yet.`;
+      } catch (e) { /* stays as it was */ }
+    };
+    recent(); setInterval(recent, 60000);
+  }
+
+  async function showProjects() {
     try { await loadSetup(); } catch (e) { $("npMsg").className = "msg-line bad"; $("npMsg").textContent = "Couldn't reach the service. Reload the page to try again."; return; }
     preview(); renderRecent();
     (NP.drive == null ? $("adVol") : $("npClientFolder")).focus();
@@ -1402,11 +1451,12 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
 
   // ---------- go ----------
   renderTimeline(); renderRows(); renderFeed();
-  setInterval(() => { renderNow(); tickClock(); }, 1000);
+  setInterval(() => { renderNow(); tickClock(); renderHomeNow(); }, 1000);
   setInterval(renderTimeline, 15000);
   pollStatus();
-  if (PAGE === "projects") showProjects();
-  else if (location.hash === "#new") location.replace("/?t=" + encodeURIComponent(TOKEN));  // old New project links
+  if (PAGE === "new") showProjects();
+  else if (PAGE === "home") showHome();
+  else if (location.hash === "#new") location.replace(link("/new"));  // old New project links
   else pollLibrary(true);
 })();
 </script>

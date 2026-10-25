@@ -28,8 +28,8 @@ Files are written to a temporary name and renamed only when complete, so a crash
 ## See it working live
 
 - **Dashboard:** the service runs a small web page on your own machine only (`127.0.0.1`, never the network).
-  It has two pages: **Projects** (the start page: every drive's free space, set up a new job, and the jobs made
-  recently) and **Backups**. Drives under 15% free show amber, under 5% red; drives set up here but not connected
+  It has three pages: **Home** (the start page: backup status with Back up now / Stop / Pause, every drive's free
+  space, and the jobs made recently), **New project** and **Backups**. Drives under 15% free show amber, under 5% red; drives set up here but not connected
   are listed too, and shares on the same storage say so.
   The bar at the top of every page shows whether backups are running. The Backups page shows a timeline of every check with a live playhead, what is being exported right now and how far through
   the library it is, an activity feed, every project's backup status, and a **Settings** drawer (backup folder,
@@ -37,8 +37,7 @@ Files are written to a temporary name and renamed only when complete, so a crash
   Open it with `python3 resolve_cloud_backup.py dashboard` (prints the address) or from the menu bar icon.
   The address contains a private access token, so other websites and other users on the machine can't use it.
 - **macOS menu bar icon:** a coloured dot: green up to date, blue backing up, amber waiting for Resolve,
-  red something failed, grey paused or the service isn't running. Click it for the status line, *New project…*
-  (the Projects page), *Backups…* (the Backups page), *Back up now*, *Stop this backup* (ends the check that's
+  red something failed, grey paused or the service isn't running. Click it for the status line, *Open Colour Project Manager* (Home), *New project…*, *Backups…* (the Backups page), *Back up now*, *Stop this backup* (ends the check that's
   running, after the current project; the next one runs as usual), *Pause backups*, *Open backup folder* and *Open log*. You get a notification when a check
   finishes with a failure. Quitting the icon never stops backups.
 
@@ -219,7 +218,7 @@ about 80 seconds hidden against about 17 minutes through an open Resolve.
 
 ## New project set-up
 
-**New project** (the Projects page, or **New project…** in the menu bar) sets up a job in one go. Every job gets
+**New project** (its own page, or **New project…** in the menu bar) sets up a job in one go. Every job gets
 all of these, named after the job: its working folders on the workstation's RAID
 (`Projects/<Client>/<Job>`, from the `Project` template), its deliverables folders on the deliverables drive
 (`Deliverables/Projects/<Job>`, from the `Deliverables` template; exports only, never working projects) and its

@@ -579,6 +579,7 @@ class ProjectSetup:
                 results[v.name] = self.usage(v)
             except (OSError, subprocess.SubprocessError) as e:
                 results[v.name] = e if isinstance(e, OSError) else OSError("it didn't answer")
+        vols = [v for v in vols if not (v.is_symlink() and os.path.realpath(v) == "/")]  # this Mac's own disk
         threads = [threading.Thread(target=measure, args=(v,), daemon=True) for v in vols]
         for t in threads:
             t.start()
@@ -589,7 +590,7 @@ class ProjectSetup:
         for v in vols:
             u = results.get(v.name)
             row = {"name": v.name, "roles": roles.get(v.name, []), "connected": True, "total": None, "free": None,
-                   "problem": None, "system": v.is_symlink() and os.path.realpath(v) == "/"}
+                   "problem": None}
             if u is None:
                 row["problem"] = "Didn't answer in time."
             elif isinstance(u, OSError):
@@ -604,8 +605,7 @@ class ProjectSetup:
                 if twins:
                     row["shares_with"] = twins
         seen = {v.name for v in vols}
-        out += [{"name": n, "roles": r, "connected": False, "total": None, "free": None, "problem": "Not connected.",
-                 "system": False} for n, r in sorted(roles.items()) if n not in seen]
+        out += [{"name": n, "roles": r, "connected": False, "total": None, "free": None, "problem": "Not connected."} for n, r in sorted(roles.items()) if n not in seen]
         return out
 
     def library_projects(self) -> dict:

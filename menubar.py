@@ -360,6 +360,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
             self.shown = None
             self.m_title = rumps.MenuItem("Starting")
             self.m_detail = rumps.MenuItem("")
+            self.m_home = rumps.MenuItem("Open Colour Project Manager", callback=self.open_home)
             self.m_dash = rumps.MenuItem("Backups…", callback=self.open_dashboard)
             self.m_new = rumps.MenuItem("New project…", callback=self.new_project)
             self.m_run = rumps.MenuItem("Back up now", callback=self.run_now)
@@ -372,7 +373,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
             self.m_log = rumps.MenuItem("Open log", callback=self.open_log)
             self.m_quit = rumps.MenuItem("Quit Colour Project Manager" if embedded else "Quit menu bar icon",
                                          callback=self.quit)
-            top = [self.m_title, self.m_detail, None, self.m_new, self.m_dash, None, self.m_run, self.m_stop, self.m_pause]
+            top = [self.m_title, self.m_detail, None, self.m_home, self.m_new, self.m_dash, None, self.m_run, self.m_stop, self.m_pause]
             if not embedded:
                 top.append(self.m_start)
             self.menu = top + [None, self.m_folder, self.m_log] + ([self.m_login] if embedded else []) + [None, self.m_quit]
@@ -407,6 +408,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
                 self.m_pause.title = "Resume backups" if s["paused"] else "Pause backups"
                 self.m_start.set_callback(self.start if s["key"] in ("off", "denied") else None)
                 self.m_dash.set_callback(self.open_dashboard if s["key"] not in ("off", "denied") else None)
+                self.m_home.set_callback(self.open_home if s["key"] not in ("off", "denied") else None)
                 self.m_new.set_callback(self.new_project if s["key"] not in ("off", "denied") else None)
             msg = alerts.check(s)
             if msg:
@@ -415,7 +417,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
         # ---- actions
         def say_hello(self, timer):
             timer.stop()
-            self.open_dashboard(None)
+            self.open_home(None)
 
         def toggle_login(self, item):
             item.state = not item.state
@@ -435,10 +437,15 @@ def run_app(runner=None, first_run: bool = False) -> int:
             if url:
                 webbrowser.open(page_url(url, "/backups"))
 
-        def new_project(self, _):
+        def open_home(self, _):
             url = client.dashboard_url()
             if url:
                 webbrowser.open(page_url(url, "/"))
+
+        def new_project(self, _):
+            url = client.dashboard_url()
+            if url:
+                webbrowser.open(page_url(url, "/new"))
 
         def stop_run(self, _):
             try:

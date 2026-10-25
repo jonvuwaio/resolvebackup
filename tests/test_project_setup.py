@@ -340,6 +340,7 @@ class DriveTests(unittest.TestCase):
         self.s = self.rig.setup
         self.rig.cfg["backup_dir"] = str(self.rig.vol / "WashDeliverables/Backups")
         (self.rig.vol / "Shared").mkdir()
+        (self.rig.vol / "Macintosh HD").symlink_to("/")  # this Mac's own disk: never listed
         figures = {"Colour-3-Raid": (66e12, 62e12, 4e12), "WashDeliverables": (190e12, 120e12, 70e12),
                    "Shared": (190e12, 120e12, 70e12)}
 
@@ -357,6 +358,7 @@ class DriveTests(unittest.TestCase):
         self.assertEqual(rows["WashDeliverables"]["shares_with"], ["Shared"])
         self.assertIn("gone", rows["Wash-Raid-6"]["problem"])
         self.assertEqual((rows["Colour-9-Raid"]["connected"], rows["Colour-9-Raid"]["roles"]), (False, ["Projects"]))
+        self.assertNotIn("Macintosh HD", rows)
 
     def test_a_hung_drive_does_not_hold_the_page(self):
         import time as _t
@@ -400,7 +402,7 @@ class ApiTests(unittest.TestCase):
                                                           "Content-Type": "application/json"})
                     with urllib.request.urlopen(req) as r:
                         return json.loads(r.read())
-                for page in ("/", "/backups"):  # the projects page and the backups page are the same file
+                for page in ("/", "/new", "/backups"):  # home, new project and backups are one file
                     req = urllib.request.Request(f"http://127.0.0.1:{dash.port}{page}?t={dash.token}")
                     with urllib.request.urlopen(req) as r:
                         self.assertIn(b"Colour Project Manager", r.read())
