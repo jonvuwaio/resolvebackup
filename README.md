@@ -226,10 +226,16 @@ DaVinci Resolve project with the bins, and its Frame.io project with the review 
 1. Pick the **project drive**: the RAID of the workstation the job is on. **Add a drive…** at the bottom of the
    list offers every connected drive that isn't set up yet, already filled in as `Projects/<Client>/<Job>` with
    the `Project` template (change either for a drive that's laid out differently).
-2. Fill in the **client folder** (pick an existing one or type a new one) and the **job name**, for example
-   `WC105_WSM_Varley_Spring26`: number, client and title joined with underscores. It starts with the next free
-   number (from every drive and every backed-up project), and picking a client adds the name that client's last
-   job used. Spaces become underscores. Every path is previewed live.
+2. Pick the **job name** from the list, which comes from column G of the Job Report's CURRENT tab (newest number
+   first; jobs already set up are at the bottom, to finish a missing part). The **client folder** is then picked
+   for you: the folder that client's jobs went in most recently. Both are drop-downs, to keep typing (and typos)
+   out of it; **Type a name that isn't on the list…** and **New client folder…** are there for the exceptions. A
+   typed job name starts with the next free number. Every path is previewed live.
+
+   The job list is read from a link to just the job names, published from Google Sheets, so the Job Report itself
+   (budgets, contacts) stays private: make a sheet with `=IMPORTRANGE("<Job Report ID>", "CURRENT!G:G")` in A1,
+   publish it to the web as CSV, and paste the link under **Templates and locations > Job list**. The list is read
+   again every two minutes, or when you press **Refresh**.
 3. Check the list of what the job gets and press **Create project**. It's all or nothing: Create stays off until
    every part can be made (a drive that isn't connected blocks it), and if one part fails, what that attempt made
    elsewhere is taken back. A part that already exists is left alone, so a job missing one part can be finished.
@@ -308,7 +314,7 @@ Manager → *Import Project*, and pick the newest `.drp` from the project's back
 python3 -m unittest discover -s tests -v
 ```
 
-The 187 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
+The 193 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
 collaboration scenarios, backoff and alerts, `probe`, database switching, retention, caps, filters) plus the
 scheduler, the hidden-Resolve hand-over (with faked processes), the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, the installer, and new project set-up (templates, previews, creating and rolling back folders, and its dashboard API).
 

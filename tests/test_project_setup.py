@@ -270,6 +270,68 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(self.s.create(FIELDS, "first")["ok"])
 
 
+class JobListTests(unittest.TestCase):
+    CSV = ("Job Name\nWB249_Dyson_308FH_ColourAdapt\n\nWB260_Unit9_SaudiaAirlines_SiteSeen\n"
+           "not a job\nWC095_AaronWheeler_ByFeel\nWB249_Dyson_308FH_ColourAdapt\nWB300_Bad Name\n")
+
+    def setUp(self):
+        t = tempfile.TemporaryDirectory()
+        self.addCleanup(t.cleanup)
+        self.rig = Rig(Path(t.name))
+        self.s = self.rig.setup
+        self.calls = []
+        self.answer = self.CSV
+        self.s.fetch = lambda url: self.calls.append(url) or self._answer()
+        self.rig.cfg["project_setup"]["job_list_url"] = "https://docs.google.com/x/pub?output=csv"
+
+    def _answer(self):
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+    def test_parse(self):
+        self.assertEqual(ps.parse_job_list(self.CSV), ["WB249_Dyson_308FH_ColourAdapt",
+                                                       "WB260_Unit9_SaudiaAirlines_SiteSeen", "WC095_AaronWheeler_ByFeel"])
+
+    def test_newest_first_and_what_is_already_set_up(self):
+        jl = self.s.job_list()
+        self.assertIsNone(jl["problem"])
+        self.assertEqual([(r["job"], r["done"]) for r in jl["names"]], [
+            ("WC095_AaronWheeler_ByFeel", True),  # its folder is on Colour-3-Raid
+            ("WB260_Unit9_SaudiaAirlines_SiteSeen", False), ("WB249_Dyson_308FH_ColourAdapt", False)])
+        self.s.job_list()
+        self.assertEqual(len(self.calls), 1)  # kept for a while
+        self.s.job_list(fresh=True)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_a_failed_read_keeps_the_last_list(self):
+        self.s.job_list()
+        self.answer = OSError("offline")
+        jl = self.s.job_list(fresh=True)
+        self.assertEqual(len(jl["names"]), 3)
+        self.assertIn("offline", jl["problem"])
+
+    def test_problems_are_explained(self):
+        self.answer = ValueError("That link gives a web page, not CSV.")
+        self.assertIn("web page", self.s.job_list()["problem"])
+        self.answer = "nothing,here\n"
+        self.assertIn("no job names", self.s.job_list(fresh=True)["problem"])
+        del self.rig.cfg["project_setup"]["job_list_url"]
+        self.assertEqual(self.s.job_list(), {"configured": False, "names": [], "problem": None})
+
+    def test_setting(self):
+        clean, errs = ps.validate_config({"job_list_url": " https://docs.google.com/a "})
+        self.assertEqual((clean["job_list_url"], errs), ("https://docs.google.com/a", {}))
+        self.assertIn("project_setup.job_list_url", ps.validate_config({"job_list_url": "http://x"})[1])
+        self.assertIsNone(ps.validate_config({"job_list_url": ""})[0]["job_list_url"])
+
+    def test_template_projects_by_library(self):
+        self.s.library_names = lambda: {"db_x": "WashOrgSrvrDB_1"}
+        lp = self.s.library_projects()
+        self.assertIn("WSMLondon/WC051_WSM_Varley/WC051_WSM_Varley_GV1", lp["WashOrgSrvrDB_1"])
+        self.assertIn("job_list", self.s.payload())
+
+
 class ApiTests(unittest.TestCase):
     def test_endpoints(self):
         with tempfile.TemporaryDirectory() as d:

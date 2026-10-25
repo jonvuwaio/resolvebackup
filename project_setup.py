@@ -32,10 +32,15 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import csv
+import io
 import re
 import secrets
+import ssl
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 PLACEHOLDERS = ("job", "job_no", "client", "client_folder", "title", "yyyy", "mm", "dd")
@@ -49,6 +54,8 @@ _TITLE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _JOB_NAME_RE = re.compile(r"^([A-Z]{1,3}\d{3,5})_([A-Za-z0-9][A-Za-z0-9_-]*)$")
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+
+JOB_LIST_TTL = 120  # seconds the job list from the sheet is kept before it's fetched again
 
 PERMISSION_HELP = ("macOS didn't let Colour Project Manager write there. Allow it under System Settings > Privacy & Security "
                    "> Files and Folders (Network Volumes or Removable Volumes), then try again.")
@@ -238,8 +245,10 @@ def validate_config(inc) -> tuple[dict, dict]:
         clean["resolve"] = _validate_resolve(inc["resolve"], errs)
     if "frameio" in inc:
         clean["frameio"] = _validate_frameio(inc["frameio"], errs)
+    if "job_list_url" in inc:
+        clean["job_list_url"] = _validate_job_list_url(inc["job_list_url"], errs)
     for k in inc:
-        if k not in ("templates_dir", "drives", "extras", "resolve", "frameio"):
+        if k not in ("templates_dir", "drives", "extras", "resolve", "frameio", "job_list_url"):
             errs[f"project_setup.{k}"] = "Unknown setting."
     return clean, errs
 
@@ -271,6 +280,47 @@ def next_job_number(names) -> str | None:
     return f"{letters}{num:0{width}d}"
 
 
+def _ssl_context() -> ssl.SSLContext:
+    try:  # the built app has no system certificate file; certifi is bundled with it
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+def fetch_text(url: str, timeout: float = 10) -> str:
+    """GET a published sheet. Raises OSError (or ValueError for a page that isn't CSV) when it can't."""
+    req = urllib.request.Request(url, headers={"Accept": "text/csv,*/*"})
+    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as r:
+        ctype = r.headers.get("Content-Type", "")
+        body = r.read(5_000_000).decode("utf-8-sig", errors="replace")
+    if "html" in ctype.lower():
+        raise ValueError("That link gives a web page, not CSV. In Google Sheets use File > Share > Publish to web, "
+                         "choose the sheet and Comma-separated values (.csv), and copy that link.")
+    return body
+
+
+def parse_job_list(text: str) -> list[str]:
+    """Job names from the published sheet: every cell that looks like one (WB249_Client_Title), in order, once."""
+    out, seen = [], set()
+    for row in csv.reader(io.StringIO(text)):
+        for cell in row:
+            name = cell.strip()
+            if _JOB_NAME_RE.match(name) and "__" not in name and not name.endswith("_") and name not in seen:
+                seen.add(name)
+                out.append(name)
+    return out
+
+
+def _validate_job_list_url(v, errs: dict):
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    if not isinstance(v, str) or len(v) > 2000 or not v.strip().startswith("https://"):
+        errs["project_setup.job_list_url"] = "Paste the https:// link from Publish to web."
+        return None
+    return v.strip()
+
+
 def _write_json(path: Path, data) -> None:
     tmp = path.with_name(f".{path.name}.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
@@ -296,8 +346,12 @@ class ProjectSetup:
     """Creates job folders. One per service; safe to call from the dashboard's threads."""
 
     def __init__(self, get_cfg, state_dir: Path, known_names=lambda: (), volumes: Path = Path("/Volumes"),
-                 mkdir=None, clock=None, libraries=lambda: [], frameio=None):
+                 mkdir=None, clock=None, libraries=lambda: [], frameio=None, fetch=None, library_names=lambda: {}):
         self.get_cfg = get_cfg
+        self.fetch = fetch          # url -> text, for the job list; None = never fetch
+        self.library_names = library_names  # {database id: library name}, to offer template projects
+        self._jobs_cache: tuple[float, str, list] | None = None
+        self._jobs_problem: str | None = None
         self.frameio = frameio  # a frameio.FrameIO, or None
         self.manifest = Path(state_dir) / "created_projects.json"
         self.known_names = known_names
@@ -316,7 +370,8 @@ class ProjectSetup:
         c = self.get_cfg().get("project_setup") or {}
         r = c.get("resolve") or {}
         f = c.get("frameio") or {}
-        return {"templates_dir": c.get("templates_dir"), "drives": list(c.get("drives") or []),
+        return {"templates_dir": c.get("templates_dir"), "job_list_url": c.get("job_list_url"),
+                "drives": list(c.get("drives") or []),
                 "extras": list(c.get("extras") or []),
                 "resolve": {"enabled": bool(r.get("enabled")), "library": r.get("library"), "template": r.get("template"),
                             "folder": r.get("folder") or "{client_folder}/{job}", "project": r.get("project") or "{job}_CV1"},
@@ -424,11 +479,61 @@ class ProjectSetup:
                         note(None, j.name)
             except OSError:
                 continue
-        val = {"jobs": jobs, "clients": clients}
+        names: set[str] = set()   # every job name seen, to tell which jobs in the list are already set up
+        for full in self.known_names():
+            names.update((full.partition("::")[2] or full).split("/"))
+        for loc in locs:
+            head = loc.get("path", "").split("{", 1)[0]
+            try:
+                if head.endswith("/") and Path(head).is_dir():
+                    for c in Path(head).iterdir():
+                        names.add(c.name)
+                        if c.is_dir() and loc.get("path", "")[len(head):].startswith("{client_folder}/"):
+                            names.update(j.name for j in c.iterdir())
+            except OSError:
+                continue
+        val = {"jobs": jobs, "clients": clients, "names": names}
         self._scan_cache = (time.monotonic(), key, val)
         return val
 
-    def payload(self) -> dict:
+    def job_list(self, fresh: bool = False) -> dict:
+        """The job names from the published sheet, newest number first, each marked if it's already set up."""
+        url = self.cfg()["job_list_url"]
+        if not url or not self.fetch:
+            return {"configured": bool(url), "names": [], "problem": None}
+        hit = self._jobs_cache
+        if fresh or not hit or hit[1] != url or time.monotonic() - hit[0] > JOB_LIST_TTL:
+            try:
+                names = parse_job_list(self.fetch(url))
+                self._jobs_cache, self._jobs_problem = (time.monotonic(), url, names), None
+                if not names:
+                    self._jobs_problem = "The published sheet has no job names in it."
+            except (OSError, ValueError) as e:
+                why = str(e) if isinstance(e, ValueError) else f"Couldn't read the job list: {getattr(e, 'reason', None) or e}."
+                self._jobs_problem = why
+                if not hit or hit[1] != url:
+                    return {"configured": True, "names": [], "problem": why}
+                self._jobs_cache = (time.monotonic() - JOB_LIST_TTL + 30, url, hit[2])  # try again in 30 s
+        known = self._scan()["names"] | {r.get("job") for r in self.recent(500) if any(x.get("ok") for x in r.get("locations", []))}
+
+        def number(n):
+            m = _JOB_RE.match(n)
+            return (m.group(1), int(m.group(2))) if m else ("", 0)
+        rows = [{"job": n, "done": n in known} for n in self._jobs_cache[2]]
+        rows.sort(key=lambda r: number(r["job"]), reverse=True)
+        return {"configured": True, "names": rows, "problem": self._jobs_problem}
+
+    def library_projects(self) -> dict:
+        """{library name: ["Folder/Project", …]} from the backup record, to pick the Resolve template from."""
+        names = self.library_names()
+        out: dict[str, list[str]] = {}
+        for key in self.known_names():
+            db, _, path = key.partition("::")
+            if path:
+                out.setdefault(names.get(db, db), []).append(path)
+        return {k: sorted(v, key=str.lower) for k, v in out.items()}
+
+    def payload(self, fresh: bool = False) -> dict:
         templates, problem = self.templates()
         scan = self._scan()
         clients = [{"folder": k, "client": v["client"] or (k if _PART_RE.match(k) else None), "last_job": v["last_job"]}
@@ -437,7 +542,8 @@ class ProjectSetup:
                 "next_job_no": next_job_number(scan["jobs"].values()), "clients": clients,
                 "placeholders": list(PLACEHOLDERS), "recent": self.recent(10), "volumes": self.volumes_list(),
                 "last_drive": self.last_drive(), "libraries": sorted(self.libraries(), key=str.lower),
-                "frameio": self.frameio.status() if self.frameio else None}
+                "frameio": self.frameio.status() if self.frameio else None,
+                "job_list": self.job_list(fresh), "library_projects": self.library_projects()}
 
     def last_drive(self) -> str | None:
         """The project drive used for the most recent job, so the list starts there."""

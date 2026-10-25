@@ -62,7 +62,7 @@ import frameio
 import project_setup
 
 APP = "resolve-cloud-backup"
-VERSION = "1.14.0"
+VERSION = "1.15.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -1556,7 +1556,8 @@ class Service:
             lambda: load_config(self.cfg_path), self.dir,
             known_names=lambda: self.backup.load_state()["projects"].keys(),
             libraries=lambda: list(self.backup.known_library_names(self.backup.load_state()).values()),
-            frameio=self.frameio)
+            frameio=self.frameio, fetch=project_setup.fetch_text,
+            library_names=lambda: self.backup.known_library_names(self.backup.load_state()))
         self.status.set(paused=False, state="starting")
         last = self.backup.load_state().get("last_cycle")
         if last:
@@ -2064,7 +2065,8 @@ def _make_handler(dash: DashboardServer):
                 elif path == "/api/settings":
                     self._send(200, dash.settings_payload())
                 elif path == "/api/project-setup":
-                    self._send(200, {**dash.svc.setup.payload(), "can_choose_folder": can_choose_folder(),
+                    fresh = (qs.get("fresh") or [""])[0] == "1"
+                    self._send(200, {**dash.svc.setup.payload(fresh), "can_choose_folder": can_choose_folder(),
                                      "frameio_redirect": dash.frameio_redirect()})
                 elif path == "/api/frameio/workspaces":
                     try:
