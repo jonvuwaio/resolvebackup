@@ -211,7 +211,8 @@ about 80 seconds hidden against about 17 minutes through an open Resolve.
 
 ## New project set-up
 
-**New project** (dashboard header, or **New project…** in the menu bar) makes a job's folders in one go:
+**New project** (dashboard header, or **New project…** in the menu bar) sets up a job in one go: its folders on
+the workstation's RAID and its DaVinci Resolve project.
 
 1. Pick the **project drive**: the RAID of the workstation the job is on. **Add a drive…** at the bottom of the
    list offers every connected drive that isn't set up yet, already filled in as `Projects/<Client>/<Job>` with
@@ -220,20 +221,40 @@ about 80 seconds hidden against about 17 minutes through an open Resolve.
    the **client folder** (pick an existing one or type a new one), the **client as it appears in the job name**
    (filled in from that client's last job) and the **job title**. Spaces in the title become underscores.
    The job name, for example `WC105_WSM_Varley_Spring26`, and every path are previewed live.
-3. Tick any extra locations (for example deliverables) and press **Create folders**.
+3. Tick any extra locations (for example deliverables) and press **Create project**.
+
+**The Resolve project** (for example `WC105_WSM_Varley_Spring26_CV1` in the library's
+`WSMLondon/WC105_WSM_Varley_Spring26` folder) is a copy of your template project (`Project_Template/ProjectTemplate`),
+so it starts with the template's bins, timeline and project settings: change the template in Resolve and every new
+job follows. It's made by exporting the template and importing that under the new name, which never opens a
+project, so it's safe while you're working in Resolve:
+
+- Resolve open on the right library: it's made there, in a couple of seconds, and the Project Manager is put
+  back on the folder you were looking at.
+- Resolve open on another library: it isn't made; switch library (or close Resolve) and press **Retry**.
+- Resolve closed: Resolve is started hidden on the right library for about 20 seconds, as for backups.
+
+The folders are made at once; the Resolve project follows a moment later and the panel shows its progress. A
+backup check that's running stops between projects to let it through. Folders it had to make in Resolve are
+removed again if the project can't be made.
 
 Templates are the folders inside the templates folder (for example `/Volumes/WashDeliverables/FolderStructures`).
 Each top-level folder there is one template, and its sub-folders are copied (empty) into the new job, so changing a
 template there changes every job made after. Placeholders such as `{job}` work in template folder names too.
 
-Safety: nothing is touched until **Create folders**; an existing job folder is never added to; if anything fails
+Safety: nothing is touched until **Create project**; an existing job folder is never added to; if anything fails
 part way, the folders made by that attempt are removed again (only empty folders this app just created); a job
 number already in use is flagged. Every job made is recorded in `created_projects.json` in the app's folder, and in
 the log.
 
 Drives, extra locations and the templates folder can also be edited under **Templates and locations** in the
 same panel. In paths, `{job}` is the job name; `{client_folder}`, `{client}`, `{job_no}`, `{title}`, `{yyyy}`,
-`{mm}` and `{dd}` also work. Creating the DaVinci Resolve project and the Frame.io project come next.
+`{mm}` and `{dd}` also work. The Resolve library, template project, folder and project name are set there too.
+Creating the Frame.io project comes next.
+
+A hidden (`-nogui`) Resolve stops answering scripts as soon as it opens a project (checked on Resolve 21.1), so
+the hidden Resolve never opens one: projects that can only be backed up by opening them are retried once Resolve
+is open normally.
 
 ## Restoring locally
 
@@ -258,7 +279,7 @@ Manager → *Import Project*, and pick the newest `.drp` from the project's back
 python3 -m unittest discover -s tests -v
 ```
 
-The 148 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
+The 160 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
 collaboration scenarios, backoff and alerts, `probe`, database switching, retention, caps, filters) plus the
 scheduler, the hidden-Resolve hand-over (with faked processes), the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, the installer, and new project set-up (templates, previews, creating and rolling back folders, and its dashboard API).
 

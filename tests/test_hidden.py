@@ -270,8 +270,8 @@ def dbname(uuid):
     return "db_" + uuid.replace("-", "")
 
 
-class RotationTests(Base):
-    """Each hidden check opens the next cloud library by editing Resolve's activedb.conf, then puts it back."""
+class LibraryRig(Base):
+    """Three cloud libraries, Resolve's activedb.conf and a hidden Resolve that opens whichever it names."""
 
     def setUp(self):
         super().setUp()
@@ -306,8 +306,8 @@ class RotationTests(Base):
         self.cfg_path.write_text(json.dumps({"backup_dir": str(self.tmp / "out"), "min_free_gb": 0,
                                              "pause_between_exports_seconds": 0, "dashboard": {"port": 0}, **over}))
 
-    def service(self):
-        return rcb.Service(self.cfg_path, status=self.status, connect=lambda c: None, clock=self.clock,
+    def service(self, connect=lambda c: None):
+        return rcb.Service(self.cfg_path, status=self.status, connect=connect, clock=self.clock,
                            state_dir=self.tmp, hidden_factory=lambda cfg: self.hidden(cfg),
                            processes=lambda: rcb.resolve_processes(self.fs.run), watchdog=lambda pid: None,
                            active_library=rcb.ActiveLibrary(self.conf, self.tmp / "activedb.conf.saved"))
@@ -320,6 +320,10 @@ class RotationTests(Base):
             self.pm.db = db
             self.opened.append((db["DbName"], self.connects))
         return r
+
+
+class RotationTests(LibraryRig):
+    """Each hidden check opens the next cloud library by editing Resolve's activedb.conf, then puts it back."""
 
     def check(self, svc):
         self.connects = 0
@@ -395,6 +399,151 @@ class RotationTests(Base):
     def test_library_uuid(self):
         self.assertEqual(rcb.library_uuid(dbname(A)), A)
         self.assertIsNone(rcb.library_uuid("Local Database"))
+
+class CreatingPM(FakePM):
+    """FakePM that can also make folders and import projects."""
+
+    def __init__(self):
+        super().__init__()
+        self.imports = []
+        self.import_fails = False
+
+    def CreateFolder(self, name):
+        n = self._node()
+        if name in n["folders"]:
+            return False
+        n["folders"][name] = {"projects": {}, "folders": {}}
+        return True
+
+    def DeleteFolder(self, name):
+        return self._node()["folders"].pop(name, None) is not None
+
+    def ImportProject(self, path, name=None):
+        if self.import_fails or name in self._node()["projects"] or not Path(path).exists():
+            return False
+        self.imports.append((Path(path).read_bytes(), name, list(self.path)))
+        self._node()["projects"][name] = {"mod": "2026-10-01 10:00:00", "collab": False}
+        return True
+
+
+JOB = {"library": "WashOrgSrvrDB_1", "template_path": ["Project_Template"], "template": "ProjectTemplate",
+       "folder": ["WSMLondon", "WC105_WSM_Varley"], "project": "WC105_WSM_Varley_CV1"}
+
+
+class MakeResolveProjectTests(unittest.TestCase):
+    def setUp(self):
+        self.pm = CreatingPM()
+        self.pm.add(["Project_Template"], "ProjectTemplate", "2026-10-01 10:00:00")
+        self.pm.add(["WSMLondon", "WC051_WSM_Old"], "WC051_WSM_Old_CV1", "2026-10-01 10:00:00")
+        self.pm.path = ["WSMLondon"]  # where the user was looking
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def node(self, *path):
+        n = self.pm.tree
+        for p in path:
+            n = n["folders"][p]
+        return n
+
+    def test_copies_the_template_into_the_job_folder(self):
+        r = rcb.make_resolve_project(self.pm, JOB, self.tmp)
+        self.assertEqual(r["state"], "done", r)
+        self.assertEqual(self.pm.imports, [(b"DRP:ProjectTemplate", "WC105_WSM_Varley_CV1", ["WSMLondon", "WC105_WSM_Varley"])])
+        self.assertEqual(self.pm.loads, [])               # nothing is ever opened
+        self.assertEqual(self.pm.path, ["WSMLondon"])     # put back where the user was
+        self.assertEqual(list(self.tmp.iterdir()), [])    # no temporary .drp left
+        self.assertEqual(rcb.make_resolve_project(self.pm, JOB, self.tmp)["state"], "exists")
+        self.assertEqual(len(self.pm.imports), 1)
+
+    def test_missing_template(self):
+        r = rcb.make_resolve_project(self.pm, {**JOB, "template": "Nope"}, self.tmp)
+        self.assertEqual(r["state"], "failed")
+        self.assertIn("Project_Template/Nope", r["message"])
+        self.assertNotIn("WC105_WSM_Varley", self.node("WSMLondon")["folders"])
+
+    def test_failed_import_removes_only_the_folders_it_made(self):
+        self.pm.import_fails = True
+        r = rcb.make_resolve_project(self.pm, {**JOB, "folder": ["NewClient", "WC105_New_Job"]}, self.tmp)
+        self.assertEqual(r["state"], "failed")
+        self.assertNotIn("NewClient", self.pm.tree["folders"])
+        r = rcb.make_resolve_project(self.pm, JOB, self.tmp)
+        self.assertNotIn("WC105_WSM_Varley", self.node("WSMLondon")["folders"])
+        self.assertIn("WC051_WSM_Old", self.node("WSMLondon")["folders"])  # existing client folder kept
+
+
+class NewProjectServiceTests(LibraryRig):
+    """The service makes a new job's Resolve project before carrying on with backups."""
+
+    FIELDS = {"job_no": "WC105", "client": "WSM", "client_folder": "WSMLondon", "title": "Varley"}
+
+    def setUp(self):
+        super().setUp()
+        self.pm = CreatingPM()
+        self.pm.add(["Project_Template"], "ProjectTemplate", "2026-10-01 10:00:00")
+        self.write_cfg(project_setup={"resolve": {"enabled": True, "library": "WashOrgSrvrDB_1",
+                                                  "template": "Project_Template/ProjectTemplate"}})
+
+    def made(self):
+        return self.pm.tree["folders"].get("WSMLondon", {}).get("folders", {}).get("WC105_WSM_Varley", {}).get("projects", {})
+
+    def test_in_a_hidden_resolve_on_the_right_library(self):
+        self.write_cfg(rotate_libraries=False, project_setup={"resolve": {
+            "enabled": True, "library": "WashOrgSrvrDB_1", "template": "Project_Template/ProjectTemplate"}})
+        self.conf.write_text(ORIGINAL.replace(f"cloud*:{A}", f"cloud*:{B}"))  # the user last used another library
+        svc = self.service()
+        svc.paused = True  # backups paused doesn't stop it
+        plan = svc.setup.plan(self.FIELDS)
+        self.assertEqual([r["kind"] for r in plan["locations"]], ["resolve"])
+        self.assertEqual(plan["locations"][0]["path"], "WashOrgSrvrDB_1 / WSMLondon/WC105_WSM_Varley / WC105_WSM_Varley_CV1")
+        r = svc.setup.create(self.FIELDS, None, [])
+        self.assertEqual(r["resolve"]["state"], "queued")
+        self.assertTrue(svc.setup.has_pending())
+        svc.tick()
+        self.assertIn("WC105_WSM_Varley_CV1", self.made())
+        self.assertEqual(self.opened[0][0], dbname(A))
+        self.assertEqual(self.fs.procs, {})                                        # hidden Resolve quit
+        self.assertEqual(self.conf.read_text(), ORIGINAL.replace(f"cloud*:{A}", f"cloud*:{B}"))  # choice put back
+        rec = svc.setup.recent(1)[0]
+        self.assertEqual((rec["resolve"]["state"], rec["resolve"]["detail"]), ("done", None))
+        self.assertFalse(svc.setup.has_pending())
+
+    def test_in_the_users_resolve_only_on_the_right_library(self):
+        self.fs.procs[42] = GUI
+        self.pm.db = {"DbType": "PostgreSQL", "DbName": dbname(B)}
+        svc = self.service(connect=lambda c: FakeResolve(self.pm))
+        rid = svc.setup.create(self.FIELDS, None, [])["id"]
+        svc.tick()
+        rec = svc.setup.recent(1)[0]["resolve"]
+        self.assertEqual(rec["state"], "failed")
+        self.assertIn("WashOrgBackup_1 open, not WashOrgSrvrDB_1", rec["message"])
+        self.assertEqual(self.made(), {})
+        self.pm.db = {"DbType": "PostgreSQL", "DbName": dbname(A)}  # they switch library, then press Retry
+        self.assertTrue(svc.setup.retry(rid)["ok"])
+        svc.tick()
+        self.assertEqual(svc.setup.recent(1)[0]["resolve"]["state"], "done")
+        self.assertIn("WC105_WSM_Varley_CV1", self.made())
+        self.assertEqual(self.fs.procs, {42: GUI})  # their Resolve left alone
+        self.assertFalse(svc.setup.retry(rid)["ok"])
+
+    def test_unfinished_jobs_are_offered_for_retry_after_a_restart(self):
+        svc = self.service()
+        svc.setup.create(self.FIELDS, None, [])
+        again = self.service()
+        rec = again.setup.recent(1)[0]["resolve"]
+        self.assertEqual(rec["state"], "failed")
+        self.assertIn("Retry", rec["message"])
+        self.assertFalse(again.setup.has_pending())
+
+    def test_a_queued_project_interrupts_a_backup_check(self):
+        svc = self.service(connect=lambda c: FakeResolve(self.pm))
+        self.fs.procs[42] = GUI
+        self.pm.db = {"DbType": "PostgreSQL", "DbName": dbname(A)}
+        for i in range(5):
+            self.pm.add(["Busy"], f"P{i}", "2026-10-01 10:00:00")
+        svc.setup._queue.append("nothing-real")  # as if a project had just been queued
+        svc.request_run_now()
+        svc._run_cycle()
+        self.assertEqual(self.status.snapshot()["last_cycle"]["status"], "interrupted")
+
 
 class SafetyTests(Base):
     """What happens when the app or the power goes while a hidden check has Resolve's library choice changed."""

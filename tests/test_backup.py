@@ -192,6 +192,15 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(s["exported"], 1)
         self.assertIsNone(self.pm.open)  # closed again
 
+    def test_never_loads_in_the_hidden_resolve(self):
+        # a -nogui Resolve stops answering scripts once it loads a project (seen on Resolve 21)
+        self.pm.add([], "Cloudy", stamp(self.now, hours=1), collab=True)
+        self.pm.need_load.add("Cloudy")
+        s = self.backup().cycle(hidden=True)
+        self.assertEqual((s["exported"], s["failed"], self.pm.loads), (0, 1, []))
+        err = self.backup().load_state()["projects"]["Studio Cloud::Cloudy"]["last_error"]
+        self.assertIn("hidden Resolve", err)
+
     # ---- projects open elsewhere
     def test_open_elsewhere_direct_export_still_works(self):
         self.pm.add([], "Busy", stamp(self.now, minutes=5))

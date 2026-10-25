@@ -99,6 +99,23 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("project_setup.drives.0.name", errs)
 
 
+class ResolveConfigTests(unittest.TestCase):
+    def test_valid_and_defaults(self):
+        clean, errs = ps.validate_config({"resolve": {"enabled": True, "library": "WashOrgSrvrDB_1",
+                                                      "template": "/Project_Template/ProjectTemplate/",
+                                                      "folder": "{client_folder}/{job}", "project": "{job}_CV1"}})
+        self.assertEqual(errs, {})
+        self.assertEqual(clean["resolve"]["template"], "Project_Template/ProjectTemplate")
+        clean, errs = ps.validate_config({"resolve": {"enabled": False}})
+        self.assertEqual(errs, {})
+
+    def test_problems(self):
+        _, errs = ps.validate_config({"resolve": {"enabled": True, "library": "", "template": "A//B",
+                                                  "folder": "{client_folder}/{nope}", "project": "x/{job}"}})
+        self.assertEqual(set(errs), {"project_setup.resolve.library", "project_setup.resolve.template",
+                                     "project_setup.resolve.folder", "project_setup.resolve.project"})
+
+
 class SetupTests(unittest.TestCase):
     def setUp(self):
         t = tempfile.TemporaryDirectory()
@@ -183,6 +200,35 @@ class SetupTests(unittest.TestCase):
             raise PermissionError(1, "Operation not permitted")
         self.s.mkdir = mkdir
         self.assertIn("Privacy & Security", self.s.create(FIELDS, 0, [])["results"][0]["error"])
+
+    def test_resolve_row(self):
+        self.rig.cfg["project_setup"]["resolve"] = {"enabled": True, "library": "WashOrgSrvrDB_1",
+                                                    "template": "Project_Template/ProjectTemplate"}
+        row = self.s.plan(FIELDS)["locations"][-1]
+        self.assertEqual((row["kind"], row["status"], row["on"]), ("resolve", "ready", True))
+        self.assertEqual((row["folder"], row["project"]), ("SaatchiSaatchi/WC105_Saatchi_Plusnet_Plusso",
+                                                           "WC105_Saatchi_Plusnet_Plusso_CV1"))
+        self.assertFalse(self.s.plan(FIELDS, resolve=False)["locations"][-1]["on"])
+        self.rig.names.append("db_x::SaatchiSaatchi/WC105_Saatchi_Plusnet_Plusso/WC105_Saatchi_Plusnet_Plusso_CV1")
+        self.assertEqual(self.s.plan(FIELDS)["locations"][-1]["status"], "exists")
+        r = self.s.create(FIELDS, 0, [])
+        self.assertEqual(r["resolve"]["state"], "skipped")  # folders still made
+        self.assertTrue(r["results"][0]["ok"])
+        self.assertFalse(self.s.has_pending())
+
+    def test_resolve_only_and_queue(self):
+        self.rig.cfg["project_setup"].update(drives=[], extras=[], resolve={
+            "enabled": True, "library": "L", "template": "T/Tpl", "project": "{job}_CV1"})
+        r = self.s.create(FIELDS, None, [])
+        self.assertTrue(r["ok"], r)
+        job = self.s.next_resolve_job()
+        self.assertEqual((job["template_path"], job["template"], job["folder"]),
+                         (["T"], "Tpl", ["SaatchiSaatchi", "WC105_Saatchi_Plusnet_Plusso"]))
+        self.s.update_job(job["id"], state="running")
+        self.assertTrue(self.s.has_pending())
+        self.s.update_job(job["id"], state="done", message="ok")
+        self.assertIsNone(self.s.next_resolve_job())
+        self.assertEqual(self.s.recent(1)[0]["resolve"]["state"], "done")
 
     def test_bad_requests(self):
         self.assertFalse(self.s.create(FIELDS, 0, "all")["ok"])

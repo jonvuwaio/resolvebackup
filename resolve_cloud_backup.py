@@ -60,7 +60,7 @@ from pathlib import Path
 import project_setup
 
 APP = "resolve-cloud-backup"
-VERSION = "1.9.0"
+VERSION = "1.10.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -417,6 +417,63 @@ def goto_path(pm, path: list[str]) -> None:
     for n in path:
         if not pm.OpenFolder(n):
             break
+
+
+def open_path(pm, path: list[str]) -> bool:
+    """Go to a folder from the root. False if any part of it isn't there."""
+    pm.GotoRootFolder()
+    return all(pm.OpenFolder(n) for n in path)
+
+
+def make_resolve_project(pm, job: dict, tmp_dir: Path) -> dict:
+    """Copy the template project into job["folder"] as job["project"], by exporting the template and importing it
+    under the new name. Nothing is ever opened, so this works in the hidden Resolve and never touches the project
+    someone has open. Missing folders are made; if the project can't be made, folders made here are removed again.
+    """
+    orig = current_folder_path(pm)
+    made: list[list[str]] = []
+    drp = Path(tmp_dir) / "template.drp"
+    result = None
+
+    def fail(msg):
+        return {"state": "failed", "message": msg}
+    try:
+        tpl = "/".join(job["template_path"] + [job["template"]])
+        if not open_path(pm, job["template_path"]) or job["template"] not in (pm.GetProjectListInCurrentFolder() or []):
+            result = fail(f"The template project {tpl} isn't in {job['library']}.")
+            return result
+        if not pm.ExportProject(job["template"], str(drp), True) or not drp.exists():
+            result = fail(f"Resolve couldn't export the template project {tpl}.")
+            return result
+        pm.GotoRootFolder()
+        for i, name in enumerate(job["folder"]):
+            if name not in (pm.GetFolderListInCurrentFolder() or []):
+                if not pm.CreateFolder(name):
+                    result = fail(f"Resolve couldn't make the folder {name}.")
+                    return result
+                made.append(job["folder"][:i + 1])
+            if not pm.OpenFolder(name):
+                result = fail(f"Resolve couldn't open the folder {name}.")
+                return result
+        if job["project"] in (pm.GetProjectListInCurrentFolder() or []):
+            result = {"state": "exists", "message": "A project with this name is already there. Nothing was changed."}
+            return result
+        if not pm.ImportProject(str(drp), job["project"]) or job["project"] not in (pm.GetProjectListInCurrentFolder() or []):
+            result = fail("Resolve didn't import the copy of the template.")
+            return result
+        result = {"state": "done", "message": f"Made {job['project']} in {'/'.join(job['folder'])}."}
+        return result
+    finally:
+        if result and result["state"] == "failed":
+            for path in reversed(made):  # only folders made here, and only while still empty
+                if open_path(pm, path) and not (pm.GetFolderListInCurrentFolder() or pm.GetProjectListInCurrentFolder()):
+                    pm.GotoParentFolder()
+                    pm.DeleteFolder(path[-1])
+        goto_path(pm, orig)
+        try:
+            drp.unlink()
+        except OSError:
+            pass
 
 
 # ------------------------------------------------------------- hidden Resolve
@@ -1126,7 +1183,8 @@ class Backup:
         orig_path = [] if switched else current_folder_path(pm)
         ctx = {"pm": pm, "state": state, "stats": stats, "now": now, "db": target.get("DbName") or "default",
                "folder": self._library_folder(target, state),
-               "open_name": open_name, "can_load": open_name is None, "exports": 0, "touched": set(),
+               # a hidden (-nogui) Resolve stops answering scripts once it loads a project, so never load there
+               "open_name": open_name, "can_load": open_name is None and not hidden, "exports": 0, "touched": set(),
                "interrupted": interrupted or (lambda: False)}
         try:
             if open_name and self.cfg["save_open_project"]:
@@ -1388,6 +1446,8 @@ class Backup:
                     tmp.unlink(missing_ok=True)
                     ok = self._via_load(pm, name, tmp)
                     reason = "" if ok else "direct export and load-and-export both failed"
+                elif not ctx["can_load"] and not ctx["open_name"]:
+                    reason = "direct export failed; projects aren't opened in the hidden Resolve, so it's retried later"
                 elif not ctx["can_load"]:
                     reason = (f"direct export failed; not loading because {ctx['open_name']!r} is open "
                               "in this Resolve")
@@ -1487,8 +1547,10 @@ class Service:
         self.backup = Backup(self.cfg, self.dir / "state.json", connect=connect, clock=clock,
                              status=self.status, sleep=lambda s: self._stop.wait(s))
         # reads config.json itself, so a drive added from the dashboard works at once, even mid-backup
-        self.setup = project_setup.ProjectSetup(lambda: load_config(self.cfg_path), self.dir,
-                                                known_names=lambda: self.backup.load_state()["projects"].keys())
+        self.setup = project_setup.ProjectSetup(
+            lambda: load_config(self.cfg_path), self.dir,
+            known_names=lambda: self.backup.load_state()["projects"].keys(),
+            libraries=lambda: list(self.backup.known_library_names(self.backup.load_state()).values()))
         self.status.set(paused=False, state="starting")
         last = self.backup.load_state().get("last_cycle")
         if last:
@@ -1620,10 +1682,10 @@ class Service:
             if hidden:
                 status = self.backup.cycle(
                     connect=lambda cfg: hidden.connect(cfg, lambda: self.stopping),
-                    interrupted=lambda: self.stopping or hidden.wanted(), hidden=True,
+                    interrupted=lambda: self.stopping or hidden.wanted() or self.setup.has_pending(), hidden=True,
                     expect_db=hidden.library)["status"]
             else:
-                status = self.backup.cycle(interrupted=lambda: self.stopping)["status"]
+                status = self.backup.cycle(interrupted=lambda: self.stopping or self.setup.has_pending())["status"]
         except Exception:  # noqa: BLE001
             log.exception("Unexpected error in backup cycle")
             status = "error"
@@ -1640,8 +1702,87 @@ class Service:
         wait = self.cfg["retry_minutes"] * 60 if retry else self._wait_after_cycle()
         self.next_run = self.wall() + wait * random.uniform(0.95, 1.05)
 
+    def _run_setup_jobs(self) -> None:
+        lock = SingleInstance(self.dir / "cycle.lock")
+        if not lock.acquire():
+            return  # a backup run by another process; try again next tick
+        try:
+            while not self.stopping:
+                job = self.setup.next_resolve_job()
+                if not job:
+                    break
+                self.setup.update_job(job["id"], state="running", detail="Connecting to DaVinci Resolve")
+                try:
+                    res = self._make_project(job)
+                except Exception:  # noqa: BLE001
+                    log.exception("Making the Resolve project for %s failed", job["job"])
+                    res = {"state": "failed", "message": "Unexpected error. See the log."}
+                (log.info if res["state"] == "done" else log.warning)("New project %s, Resolve: %s",
+                                                                       job["job"], res["message"])
+                self.setup.update_job(job["id"], detail=None, **res)
+        finally:
+            lock.release()
+
+    def _make_project(self, job: dict) -> dict:
+        def fail(msg):
+            return {"state": "failed", "message": msg}
+        names = self.backup.known_library_names(self.backup.load_state())
+        db = next((d for d, n in names.items() if n == job["library"] or d == job["library"]), None)
+        if not db:
+            return fail(f"The library {job['library']} hasn't been seen yet. Open it once in Resolve.")
+        procs = self.processes()
+        hidden_pids = [pid for pid, args in procs if " -nogui" in args]
+        h = None
+        try:
+            if procs and len(hidden_pids) < len(procs):  # the user's own Resolve
+                resolve = self.backup.connect(self.cfg)
+                if not resolve:
+                    return fail("DaVinci Resolve is open but isn't answering. Check Preferences > System > General "
+                                "> External scripting using is set to Local, then press Retry.")
+            elif HiddenResolve.available(self.cfg):
+                if hidden_pids:  # a hidden copy left running: quit it, it may be on another library
+                    old = self.hidden_factory(self.cfg)
+                    old.on_exit = self.active_library.restore
+                    old.adopt(hidden_pids[0])
+                    old.quit()
+                h = self.hidden_factory(self.cfg)
+                h.on_exit = self.active_library.restore
+                uuid = library_uuid(db)
+                if not uuid or not self.active_library.point_at(uuid):
+                    return fail("Couldn't choose the library for the hidden Resolve. Open Resolve, then press Retry.")
+                h.library = db
+                self.setup.update_job(job["id"], detail="Starting DaVinci Resolve hidden")
+                if not h.launch():
+                    self.active_library.restore()
+                    h = None
+                    return fail("DaVinci Resolve didn't start. Press Retry, or open Resolve first.")
+                self.watchdog(h.pid)
+                resolve = h.connect(self.cfg, lambda: self.stopping)
+                if not resolve:
+                    return fail("The hidden DaVinci Resolve didn't answer. Press Retry.")
+            else:
+                return fail("Open DaVinci Resolve, then press Retry.")
+            pm = resolve.GetProjectManager()
+            cur = (pm.GetCurrentDatabase() or {}).get("DbName") if pm else None
+            if cur != db:
+                return fail(f"Resolve has {names.get(cur, cur) or 'another library'} open, not {job['library']}. "
+                            "Switch library in Resolve's Project Manager, or close Resolve, then press Retry.")
+            self.setup.update_job(job["id"], detail="Making the project")
+            with tempfile.TemporaryDirectory() as tmp:
+                return make_resolve_project(pm, job, Path(tmp))
+        finally:
+            if h:
+                try:
+                    h.quit()
+                except Exception:  # noqa: BLE001
+                    log.exception("Could not quit the hidden DaVinci Resolve")
+                self.status.set(resolve={"connected": False})
+
     def tick(self) -> float:
         self.reload_config()
+        if self.setup.has_pending():  # a new project's Resolve part goes before backups, even when paused
+            self._run_setup_jobs()
+            self.next_run = min(self.next_run, self.wall() + 60)
         with self._lock:
             forced, self._run_now = self._run_now, False
         if self.paused and not forced:
@@ -1917,15 +2058,25 @@ def _make_handler(dash: DashboardServer):
                     fields = body.get("fields") if isinstance(body.get("fields"), dict) else {}
                     extras = body.get("extras")
                     extras = {i for i in extras if isinstance(i, int)} if isinstance(extras, list) else None
-                    self._send(200, svc.setup.plan(fields, body.get("drive"), extras))
+                    resolve = body.get("resolve") if isinstance(body.get("resolve"), bool) else None
+                    self._send(200, svc.setup.plan(fields, body.get("drive"), extras, resolve))
                 elif path == "/api/project-setup/create":
                     fields = body.get("fields") if isinstance(body.get("fields"), dict) else {}
-                    r = svc.setup.create(fields, body.get("drive"), body.get("extras"))
+                    resolve = body.get("resolve") if isinstance(body.get("resolve"), bool) else None
+                    r = svc.setup.create(fields, body.get("drive"), body.get("extras"), resolve)
                     for res in r.get("results", []):
                         if res["ok"]:
                             log.info("New project %s: made %d folders in %s", r["job"], res["folders"], res["path"])
                         else:
                             log.warning("New project %s: nothing made in %s: %s", r["job"], res["path"], res["error"])
+                    if r.get("resolve") and r["resolve"]["state"] == "queued":
+                        log.info("New project %s: the Resolve project is queued", r["job"])
+                        svc.wake.set()
+                    self._send(200, r)
+                elif path == "/api/project-setup/retry":
+                    r = svc.setup.retry(body.get("id"))
+                    if r["ok"]:
+                        svc.wake.set()
                     self._send(200, r)
                 elif path == "/api/pause":
                     svc.set_paused(bool(body.get("paused", True)))

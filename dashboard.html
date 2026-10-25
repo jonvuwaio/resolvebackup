@@ -187,6 +187,9 @@ details[open] > summary { margin-bottom: 4px; }
 .results li.bad::before { background: var(--bad); }
 .results small { display: block; color: var(--dim); }
 .soon { margin: 22px 0 0; color: var(--faint); font-size: 12.5px; }
+.results li.wait::before { background: var(--run); animation: pulse 1.6s ease-in-out infinite; }
+.results li .btn { margin-top: 6px; padding: 3px 10px; }
+.chip.bad_name i { background: var(--wait); } .chip.bad_name { color: var(--wait); }
 
 @media (max-width: 900px) {
   .wrap { padding: 20px 16px 40px; }
@@ -390,7 +393,7 @@ details[open] > summary { margin-bottom: 4px; }
     <p class="jobname empty" id="npJob">Job name appears here</p>
     <ul class="warns" id="npWarn"></ul>
     <div class="f"><span class="lab">Folders made</span><ul class="where" id="npWhere"></ul></div>
-    <p class="soon">DaVinci Resolve and Frame.io set-up come next.</p>
+    <p class="soon">Frame.io set-up comes next.</p>
     <ul class="results" id="npResults" hidden></ul>
     <details style="margin-top:28px" id="npEdit">
       <summary>Templates and locations</summary>
@@ -403,11 +406,24 @@ details[open] > summary { margin-bottom: 4px; }
         <div class="hint">Other places a job can get folders, for example deliverables. Tick them per job.</div>
         <div id="edExtras"></div>
         <button type="button" class="btn" id="edAddExtra" style="margin-top:8px">Add a location</button></div>
+      <div class="f"><label class="check"><input type="checkbox" id="edRvOn"> Also make a DaVinci Resolve project</label>
+        <div class="hint">A copy of the template project, made without opening anything. If Resolve is closed it's started hidden for a few seconds.</div>
+        <div class="err" data-ederr="project_setup.resolve.enabled"></div>
+        <div class="ed-row" style="border:0;padding-top:6px">
+          <div class="row"><span style="flex:none;width:9em">Library</span><select id="edRvLib" aria-label="Library"></select></div>
+          <div class="err" data-ederr="project_setup.resolve.library"></div>
+          <div class="row"><span style="flex:none;width:9em">Template project</span><input type="text" id="edRvTemplate" spellcheck="false" placeholder="Folder/Project" aria-label="Template project"></div>
+          <div class="err" data-ederr="project_setup.resolve.template"></div>
+          <div class="row"><span style="flex:none;width:9em">Put it in</span><input type="text" id="edRvFolder" spellcheck="false" aria-label="Resolve folder"></div>
+          <div class="err" data-ederr="project_setup.resolve.folder"></div>
+          <div class="row"><span style="flex:none;width:9em">Name it</span><input type="text" id="edRvProject" spellcheck="false" aria-label="Project name"></div>
+          <div class="err" data-ederr="project_setup.resolve.project"></div>
+        </div></div>
       <div class="hint" style="margin-top:14px">In paths, {job} is the job name. You can also use {client_folder}, {client}, {job_no}, {title}, {yyyy}, {mm} and {dd}.</div>
       <div class="row" style="margin-top:14px;display:flex;gap:12px;align-items:center"><button type="button" class="btn primary" id="edSave" disabled>Save locations</button><span class="msg-line" id="edMsg"></span></div>
     </details>
   </form>
-  <footer><span id="npMsg" class="msg-line" role="status"></span><button class="btn primary" id="npCreate" disabled>Create folders</button></footer>
+  <footer><span id="npMsg" class="msg-line" role="status"></span><button class="btn primary" id="npCreate" disabled>Create project</button></footer>
 </aside>
 
 <script>
@@ -804,7 +820,7 @@ details[open] > summary { margin-bottom: 4px; }
 
   // ---------- new project ----------
   const ADD = "__add__";
-  const NP = { data: null, drive: null, extras: null, clientTouched: false, touched: new Set(), showAll: false,
+  const NP = { data: null, drive: null, extras: null, resolve: null, jobId: null, clientTouched: false, touched: new Set(), showAll: false,
                timer: null, seq: 0, plan: null, busy: false, done: false, editInitial: null, opener: null };
   const STATUS_WORD = { ready: "Ready", waiting: "Waiting for the job details", exists: "Already exists",
                         drive_missing: "Drive not connected", template_missing: "Template missing", not_writable: "Can't write here" };
@@ -835,7 +851,7 @@ details[open] > summary { margin-bottom: 4px; }
   async function preview() {
     const seq = ++NP.seq;
     try {
-      const p = await api("/api/project-setup/preview", { fields: npFields(), drive: NP.drive, extras: NP.extras });
+      const p = await api("/api/project-setup/preview", { fields: npFields(), drive: NP.drive, extras: NP.extras, resolve: NP.resolve });
       if (seq !== NP.seq) return;
       NP.plan = p; renderPlan();
     } catch (e) { $("npMsg").className = "msg-line bad"; $("npMsg").textContent = "Couldn't reach the backup service."; }
@@ -850,7 +866,10 @@ details[open] > summary { margin-bottom: 4px; }
     $("npWhere").replaceChildren(...p.locations.map((r) => {
       const st = !r.on ? "Not this time" : r.status === "ready" ? (r.folders ? `Ready, ${plural(r.folders, "folder")}` : "Ready") : (r.message || STATUS_WORD[r.status]);
       const head = r.kind === "drive" ? h("span", { class: "name" }, r.name)
+        : r.kind === "resolve" ? h("label", { class: "check" }, h("input", { type: "checkbox", "data-resolve": "1", checked: r.on }), "DaVinci Resolve project")
         : h("label", { class: "check" }, h("input", { type: "checkbox", "data-extra": String(r.index), checked: r.on }), r.name);
+      if (r.kind === "resolve") return h("li", {}, head, h("span", { class: "path" }, r.path || r.library),
+        h("span", { class: "chip " + (r.on ? r.status : "waiting") }, h("i"), r.on && r.status === "ready" ? `Ready, a copy of ${r.template}` : st));
       const tree = tpl[r.template];
       return h("li", {}, head, r.path ? h("span", { class: "path" }, r.path) : null,
         h("span", { class: "chip " + (r.on ? r.status : "waiting") }, h("i"), st),
@@ -862,7 +881,7 @@ details[open] > summary { margin-bottom: 4px; }
 
   function clearDone() {
     if (!NP.done) return;
-    NP.done = false; $("npResults").hidden = true; $("npCreate").textContent = "Create folders"; $("npMsg").textContent = "";
+    NP.done = false; $("npResults").hidden = true; $("npCreate").textContent = "Create project"; $("npMsg").textContent = "";
   }
   function npInput(ev) {
     const id = ev.target.id;
@@ -882,6 +901,7 @@ details[open] > summary { margin-bottom: 4px; }
     if (k && ev.target.value.trim()) { NP.touched.add(k); renderPlan(); }
   });
   $("npWhere").addEventListener("change", (ev) => {
+    if (ev.target.dataset.resolve) { NP.resolve = ev.target.checked; clearDone(); schedulePreview(); return; }
     if (!ev.target.dataset.extra) return;
     NP.extras = [...document.querySelectorAll("#npWhere [data-extra]:checked")].map((x) => Number(x.dataset.extra));
     clearDone(); schedulePreview();
@@ -966,13 +986,20 @@ details[open] > summary { margin-bottom: 4px; }
     $("edDrives").replaceChildren(...c.drives.map((x, i) => edRow("drives", x, i)));
     if (!c.drives.length) $("edDrives").append(h("div", { class: "hint" }, "None yet. Use Add a drive… in the Project drive list."));
     $("edExtras").replaceChildren(...c.extras.map((x, i) => edRow("extras", x, i)));
+    const rv = c.resolve || {}, libs = ((NP.data && NP.data.libraries) || []).slice();
+    if (rv.library && !libs.includes(rv.library)) libs.push(rv.library);
+    $("edRvLib").replaceChildren(h("option", { value: "" }, "Choose a library"), ...libs.map((x) => h("option", { value: x }, x)));
+    $("edRvOn").checked = !!rv.enabled; $("edRvLib").value = rv.library || "";
+    $("edRvTemplate").value = rv.template || ""; $("edRvFolder").value = rv.folder || "{client_folder}/{job}"; $("edRvProject").value = rv.project || "{job}_CV1";
   }
   function collectEditor() {
     const rows = (id) => [...document.querySelectorAll(`#${id} .ed-row`)].map((r) => {
       const o = {}; for (const el of r.querySelectorAll("[data-k]")) o[el.dataset.k] = el.type === "checkbox" ? el.checked : el.value.trim();
       return o;
     });
-    return { templates_dir: $("edTemplates").value.trim() || null, drives: rows("edDrives"), extras: rows("edExtras") };
+    return { templates_dir: $("edTemplates").value.trim() || null, drives: rows("edDrives"), extras: rows("edExtras"),
+             resolve: { enabled: $("edRvOn").checked, library: $("edRvLib").value || null, template: $("edRvTemplate").value.trim() || null,
+                        folder: $("edRvFolder").value.trim() || null, project: $("edRvProject").value.trim() || null } };
   }
   const edDirty = () => { $("edSave").disabled = JSON.stringify(collectEditor()) === NP.editInitial; };
   $("npEdit").addEventListener("input", edDirty);
@@ -1000,7 +1027,7 @@ details[open] > summary { margin-bottom: 4px; }
   $("edSave").addEventListener("click", async () => {
     const cur = collectEditor();
     if (await saveSetup(cur, $("edMsg"), "ederr", "")) {
-      NP.editInitial = null; NP.extras = null;
+      NP.editInitial = null; NP.extras = null; NP.resolve = null;
       if (NP.drive != null && NP.drive >= cur.drives.length) NP.drive = null;
       await loadSetup(); clearDone(); schedulePreview();
     }
@@ -1011,28 +1038,62 @@ details[open] > summary { margin-bottom: 4px; }
     const msg = $("npMsg");
     if (NP.done) {  // start another
       for (const id of ["npJobNo", "npClientFolder", "npClient", "npTitle"]) $(id).value = "";
-      NP.clientTouched = false; NP.touched.clear(); NP.showAll = false; NP.extras = null; clearDone();
+      NP.clientTouched = false; NP.touched.clear(); NP.showAll = false; NP.extras = null; NP.resolve = null; NP.jobId = null; clearDone();
       await loadSetup(); preview(); $("npClientFolder").focus(); return;
     }
     NP.showAll = true; renderPlan();
     if (!NP.plan || !NP.plan.can_create) return;
-    NP.busy = true; $("npCreate").disabled = true; msg.className = "msg-line"; msg.textContent = "Creating folders";
+    NP.busy = true; $("npCreate").disabled = true; msg.className = "msg-line"; msg.textContent = "Creating";
     const extras = NP.plan.locations.filter((x) => x.kind === "extra" && x.on).map((x) => x.index);
     try {
-      const r = await api("/api/project-setup/create", { fields: npFields(), drive: NP.drive, extras });
+      const r = await api("/api/project-setup/create", { fields: npFields(), drive: NP.drive, extras, resolve: NP.resolve });
       if (r.results) {
         $("npResults").replaceChildren(...r.results.map((x) => h("li", { class: x.ok ? "" : "bad" },
           x.ok ? `${x.name}: made ${plural(x.folders, "folder")}` : `${x.name}: nothing made`,
           h("small", {}, x.ok ? x.path : (x.error || "")))));
-        $("npResults").hidden = false; NP.done = true;
-        msg.className = "msg-line " + (r.ok ? "ok" : "bad");
-        msg.textContent = r.ok ? `${r.job} is set up.` : "Some folders weren't made. See below.";
+        if (r.resolve) $("npResults").append(h("li", { id: "npRv" }));
+        $("npResults").hidden = false; NP.done = true; NP.jobId = r.id; NP.jobName = r.job;
+        const folderOk = r.results.every((x) => x.ok);
+        msg.className = "msg-line " + (folderOk ? "ok" : "bad");
+        msg.textContent = !folderOk ? "Some folders weren't made. See below." : r.resolve && r.resolve.state === "queued" ? "Folders made. Making the Resolve project." : `${r.job} is set up.`;
+        if (r.resolve) renderJob(r.resolve);
         $("npCreate").textContent = "Start another";
         $("npResults").scrollIntoView({ block: "nearest" });
       } else { msg.className = "msg-line bad"; msg.textContent = r.error || "Nothing was created."; }
     } catch (e) { msg.className = "msg-line bad"; msg.textContent = "Couldn't reach the backup service. Nothing was created."; }
     NP.busy = false;
     if (NP.done) $("npCreate").disabled = false; else preview();
+  });
+
+  // the Resolve project, made by the service in the background
+  const JOB_WORD = { queued: "Waiting its turn", running: "Working", done: "Made", exists: "Already there", skipped: "Not made", failed: "Not made" };
+  function renderJob(j) {
+    const li = $("npRv"); if (!li) return;
+    const busy = j.state === "queued" || j.state === "running";
+    li.className = busy ? "wait" : j.state === "done" ? "" : "bad";
+    li.replaceChildren(`DaVinci Resolve: ${JOB_WORD[j.state] || j.state}`,
+      h("small", {}, busy ? (j.detail || "Working") + ` for ${j.project || "the project"}` : (j.message || "")),
+      j.state === "failed" ? h("button", { type: "button", class: "btn", id: "npRetry" }, "Retry") : null);
+    if (!busy && NP.done && j.state !== "queued") {
+      const m = $("npMsg");
+      if (j.state === "done") { m.className = "msg-line ok"; m.textContent = `${NP.jobName} is set up.`; }
+      else if (j.state === "failed") { m.className = "msg-line bad"; m.textContent = "The Resolve project wasn't made. See below."; }
+    }
+    if (busy) setTimeout(pollJob, 1500);
+  }
+  async function pollJob() {
+    if (!NP.jobId || !$("npRv")) return;
+    try {
+      const d = await api("/api/project-setup");
+      const it = d.recent.find((x) => x.id === NP.jobId);
+      if (it && it.resolve) renderJob(it.resolve);
+    } catch (e) { setTimeout(pollJob, 3000); }
+  }
+  $("npResults").addEventListener("click", async (ev) => {
+    if (ev.target.id !== "npRetry") return;
+    ev.target.disabled = true;
+    try { await api("/api/project-setup/retry", { id: NP.jobId }); } catch (e) { /* the poll shows it */ }
+    renderJob({ state: "queued", detail: "Waiting its turn" });
   });
 
   // open / close

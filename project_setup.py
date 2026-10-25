@@ -12,6 +12,13 @@ Each says which template to copy where, with the job's details filled into its p
 Placeholders: {job} (WC105_Client_Title), {job_no}, {client}, {client_folder}, {title}, {yyyy}, {mm}, {dd}.
 They also work in template folder names.
 
+The job can also get a DaVinci Resolve project: a copy of a template project, made in the job's folder:
+
+    "resolve": {"enabled": true, "library": "WashOrgSrvrDB_1", "template": "Project_Template/ProjectTemplate",
+                "folder": "{client_folder}/{job}", "project": "{job}_CV1"}
+
+That part needs Resolve, so it's queued here and done by the service's own thread (see Service._run_setup_jobs).
+
 Kept apart from the backup engine on purpose: nothing here talks to Resolve, and a failure here can't stop backups.
 """
 from __future__ import annotations
@@ -20,6 +27,7 @@ import datetime as dt
 import json
 import os
 import re
+import secrets
 import threading
 import time
 from pathlib import Path
@@ -128,6 +136,39 @@ def _validate_places(locs, key: str, errs: dict, extras: bool) -> list:
     return out
 
 
+def _validate_resolve(r, errs: dict) -> dict:
+    key = "project_setup.resolve"
+    if not isinstance(r, dict):
+        errs[key] = "Invalid Resolve settings."
+        return {}
+    out = {}
+    if not isinstance(r.get("enabled", False), bool):
+        errs[key + ".enabled"] = "Choose on or off."
+    out["enabled"] = r.get("enabled", False) is True
+    for k, label in (("library", "Choose the library."), ("template", "Enter the template project's folder and name."),
+                     ("folder", "Enter the folder the project goes in."), ("project", "Enter the project's name.")):
+        v = r.get(k)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            if out["enabled"]:
+                errs[f"{key}.{k}"] = label
+            out[k] = None
+            continue
+        if not isinstance(v, str) or len(v) > 300:
+            errs[f"{key}.{k}"] = label
+            continue
+        v = v.strip().strip("/")
+        segs = v.split("/")
+        unknown = sorted({m for m in _PLACEHOLDER_RE.findall(v) if m not in PLACEHOLDERS})
+        if k in ("folder", "project") and unknown:
+            errs[f"{key}.{k}"] = "Unknown: " + ", ".join("{" + u + "}" for u in unknown) + "."
+        elif k in ("library", "project") and len(segs) > 1:
+            errs[f"{key}.{k}"] = "This can't contain /."
+        elif any(not x.strip() for x in segs):
+            errs[f"{key}.{k}"] = "Remove the empty folder name (//)."
+        out[k] = v
+    return out
+
+
 def validate_config(inc) -> tuple[dict, dict]:
     """Validate the project_setup settings from the dashboard. Returns (clean, errors-by-field)."""
     errs: dict = {}
@@ -145,8 +186,10 @@ def validate_config(inc) -> tuple[dict, dict]:
     for key in ("drives", "extras"):
         if key in inc:
             clean[key] = _validate_places(inc[key], f"project_setup.{key}", errs, key == "extras")
+    if "resolve" in inc:
+        clean["resolve"] = _validate_resolve(inc["resolve"], errs)
     for k in inc:
-        if k not in ("templates_dir", "drives", "extras"):
+        if k not in ("templates_dir", "drives", "extras", "resolve"):
             errs[f"project_setup.{k}"] = "Unknown setting."
     return clean, errs
 
@@ -203,21 +246,28 @@ class ProjectSetup:
     """Creates job folders. One per service; safe to call from the dashboard's threads."""
 
     def __init__(self, get_cfg, state_dir: Path, known_names=lambda: (), volumes: Path = Path("/Volumes"),
-                 mkdir=None, clock=None):
+                 mkdir=None, clock=None, libraries=lambda: []):
         self.get_cfg = get_cfg
         self.manifest = Path(state_dir) / "created_projects.json"
         self.known_names = known_names
+        self.libraries = libraries
         self.volumes = Path(volumes)
         self.mkdir = mkdir or (lambda p: p.mkdir())
         self.clock = clock or dt.datetime.now
         self._lock = threading.Lock()
+        self._mlock = threading.RLock()  # the record file
+        self._queue: list[str] = []      # record ids whose Resolve project is still to be made
         self._scan_cache: tuple[float, tuple, dict] | None = None
+        self._forget_unfinished()
 
     # ---- config
     def cfg(self) -> dict:
         c = self.get_cfg().get("project_setup") or {}
+        r = c.get("resolve") or {}
         return {"templates_dir": c.get("templates_dir"), "drives": list(c.get("drives") or []),
-                "extras": list(c.get("extras") or [])}
+                "extras": list(c.get("extras") or []),
+                "resolve": {"enabled": bool(r.get("enabled")), "library": r.get("library"), "template": r.get("template"),
+                            "folder": r.get("folder") or "{client_folder}/{job}", "project": r.get("project") or "{job}_CV1"}}
 
     def places(self) -> list[dict]:
         c = self.cfg()
@@ -330,7 +380,7 @@ class ProjectSetup:
         return {"config": self.cfg(), "templates": templates, "templates_problem": problem,
                 "next_job_no": next_job_number(scan["jobs"].values()), "clients": clients,
                 "placeholders": list(PLACEHOLDERS), "recent": self.recent(10), "volumes": self.volumes_list(),
-                "last_drive": self.last_drive()}
+                "last_drive": self.last_drive(), "libraries": sorted(self.libraries(), key=str.lower)}
 
     def last_drive(self) -> str | None:
         """The project drive used for the most recent job, so the list starts there."""
@@ -348,11 +398,11 @@ class ProjectSetup:
             return []
 
     # ---- preview
-    def plan(self, fields: dict, drive=None, extras=None) -> dict:
+    def plan(self, fields: dict, drive=None, extras=None, resolve=None) -> dict:
         """What Create would do, without touching anything.
 
         drive: index into drives (None = the most recently used, else the first). extras: indexes of the extra
-        locations to include (None = the ones on by default).
+        locations to include (None = the ones on by default). resolve: make the Resolve project (None = if set up).
         """
         c = self.cfg()
         errs = validate_fields(fields)
@@ -404,25 +454,51 @@ class ProjectSetup:
                     if not os.access(anc, os.W_OK):
                         row.update(status="not_writable", message=f"Can't write to {anc}.")
             locs.append(row)
+        rv = c["resolve"]
+        if rv["enabled"] and rv["library"] and rv["template"]:
+            row = {"kind": "resolve", "index": 0, "name": "DaVinci Resolve", "template": rv["template"],
+                   "library": rv["library"], "on": resolve is not False, "path": None, "folder": None, "project": None,
+                   "status": "ready", "message": None, "folders": 0}
+            if errs:
+                row.update(status="waiting", message="Fill in the job details.")
+            else:
+                folder, project = fill(rv["folder"], values), fill(rv["project"], values)
+                row.update(folder=folder, project=project, path=f"{rv['library']} / {folder} / {project}")
+                if any(not x.strip() for x in folder.split("/")) or "/" in project:
+                    row.update(status="bad_name", message="The Resolve folder or project name came out empty.")
+                elif any(k.endswith(f"::{folder}/{project}") for k in self.known_names()):
+                    row.update(status="exists", message="Already in Resolve. Nothing will be changed there.")
+            locs.append(row)
         ready = [r for r in locs if r["on"] and r["status"] == "ready"]
         return {"job": values["job"], "errors": errs, "warnings": warnings, "locations": locs,
                 "can_create": not errs and bool(ready)}
 
     # ---- create
-    def create(self, fields: dict, drive, extras) -> dict:
+    def create(self, fields: dict, drive, extras, resolve=None) -> dict:
         if not isinstance(extras, list) or not all(isinstance(i, int) and not isinstance(i, bool) for i in extras):
             return {"ok": False, "error": "Choose where to create the folders."}
         if not self._lock.acquire(blocking=False):
             return {"ok": False, "error": "Another project is being created. Try again in a moment."}
         try:
-            p = self.plan(fields, drive, set(extras))
+            p = self.plan(fields, drive, set(extras), resolve)
             if not p["can_create"]:
                 return {"ok": False, "error": "Nothing to create. Check the details and locations.", "plan": p}
             values = job_values(fields, self.clock().date())
             templates, _ = self.templates()
             results = []
+            job = None
             for row in p["locations"]:
                 if not row["on"]:
+                    continue
+                if row["kind"] == "resolve":
+                    if row["status"] == "ready":
+                        tpl = row["template"].split("/")
+                        job = {"state": "queued", "library": row["library"], "template_path": tpl[:-1],
+                               "template": tpl[-1], "folder": row["folder"].split("/"), "project": row["project"],
+                               "detail": "Waiting its turn", "message": None}
+                    else:
+                        job = {"state": "skipped", "library": row["library"], "project": row["project"],
+                               "message": row["message"]}
                     continue
                 res = {"kind": row["kind"], "name": row["name"], "path": row["path"], "ok": False, "folders": 0,
                        "error": None}
@@ -437,9 +513,13 @@ class ProjectSetup:
                             "Already exists. Nothing was changed there." if isinstance(e, FileExistsError)
                             else f"Couldn't create the folders: {e.strerror or e}. Nothing was left half made.")
                 results.append(res)
-            self._record(values, fields, results)
+            rid = self._record(values, fields, results, job)
+            if job and job["state"] == "queued":
+                with self._mlock:
+                    self._queue.append(rid)
             self._scan_cache = None
-            return {"ok": all(r["ok"] for r in results), "job": values["job"], "results": results}
+            return {"ok": all(r["ok"] for r in results) and (not job or job["state"] == "queued"),
+                    "id": rid, "job": values["job"], "results": results, "resolve": job}
         finally:
             self._lock.release()
 
@@ -470,17 +550,76 @@ class ProjectSetup:
             raise
         return len(tree)
 
-    def _record(self, values: dict, fields: dict, results: list) -> None:
+    def _load(self) -> list:
         try:
             items = json.loads(self.manifest.read_text(encoding="utf-8"))
-            if not isinstance(items, list):
-                items = []
+            return items if isinstance(items, list) else []
         except (OSError, ValueError):
-            items = []
-        items.append({"at": self.clock().isoformat(timespec="seconds"), "job": values["job"],
-                      "fields": {k: values[k] for k in ("job_no", "client", "client_folder", "title")},
-                      "locations": results})
+            return []
+
+    def _save(self, items: list) -> None:
         try:
             _write_json(self.manifest, items[-500:])
         except OSError:
             pass
+
+    def _record(self, values: dict, fields: dict, results: list, resolve: dict | None) -> str:
+        rid = secrets.token_hex(6)
+        with self._mlock:
+            items = self._load()
+            items.append({"id": rid, "at": self.clock().isoformat(timespec="seconds"), "job": values["job"],
+                          "fields": {k: values[k] for k in ("job_no", "client", "client_folder", "title")},
+                          "locations": results, "resolve": resolve})
+            self._save(items)
+        return rid
+
+    def _forget_unfinished(self) -> None:
+        """Resolve projects still queued when the app last stopped weren't made; say so, so they can be retried."""
+        with self._mlock:
+            items = self._load()
+            changed = False
+            for it in items:
+                r = it.get("resolve") or {}
+                if r.get("state") in ("queued", "running"):
+                    r.update(state="failed", detail=None, message="Not made: the app stopped first. Press Retry.")
+                    changed = True
+            if changed:
+                self._save(items)
+
+    # ---- the Resolve project queue (run by the service thread)
+    def has_pending(self) -> bool:
+        return bool(self._queue)
+
+    def next_resolve_job(self) -> dict | None:
+        with self._mlock:
+            while self._queue:
+                rid = self._queue[0]
+                it = next((x for x in self._load() if x.get("id") == rid), None)
+                if it and (it.get("resolve") or {}).get("state") == "queued":
+                    return {"id": rid, "job": it["job"], **it["resolve"]}
+                self._queue.pop(0)
+            return None
+
+    def update_job(self, rid: str, **kw) -> None:
+        with self._mlock:
+            items = self._load()
+            for it in items:
+                if it.get("id") == rid and it.get("resolve"):
+                    it["resolve"].update(kw)
+                    if kw.get("state") not in (None, "queued", "running") and rid in self._queue:
+                        self._queue.remove(rid)
+                    self._save(items)
+                    return
+
+    def retry(self, rid) -> dict:
+        with self._mlock:
+            items = self._load()
+            it = next((x for x in items if x.get("id") == rid), None)
+            r = (it or {}).get("resolve") or {}
+            if r.get("state") != "failed":
+                return {"ok": False, "error": "There's nothing to retry for that job."}
+            r.update(state="queued", detail="Waiting its turn", message=None)
+            self._save(items)
+            if rid not in self._queue:
+                self._queue.append(rid)
+            return {"ok": True}
