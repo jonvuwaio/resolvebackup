@@ -19,6 +19,11 @@ The job can also get a DaVinci Resolve project: a copy of a template project, ma
 
 That part needs Resolve, so it's queued here and done by the service's own thread (see Service._run_setup_jobs).
 
+And a Frame.io project with the folders of a template (see frameio.py), made while you wait:
+
+    "frameio": {"enabled": true, "client_id": "…", "account_id": "…", "workspace_id": "…", "workspace": "Wash",
+                "template": "FrameIO", "project": "{job}"}
+
 Kept apart from the backup engine on purpose: nothing here talks to Resolve, and a failure here can't stop backups.
 """
 from __future__ import annotations
@@ -40,6 +45,8 @@ _JOB_RE = re.compile(r"^([A-Z]{1,3})(\d{3,5})_")
 _JOB_NO_RE = re.compile(r"^[A-Z]{1,3}\d{3,5}$")
 _PART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
 _TITLE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 
 PERMISSION_HELP = ("macOS didn't let Resolve Backup write there. Allow it under System Settings > Privacy & Security "
                    "> Files and Folders (Network Volumes or Removable Volumes), then try again.")
@@ -163,6 +170,50 @@ def _validate_resolve(r, errs: dict) -> dict:
     return out
 
 
+def _validate_frameio(f, errs: dict) -> dict:
+    key = "project_setup.frameio"
+    if not isinstance(f, dict):
+        errs[key] = "Invalid Frame.io settings."
+        return {}
+    out = {"enabled": f.get("enabled", False) is True}
+    if not isinstance(f.get("enabled", False), bool):
+        errs[key + ".enabled"] = "Choose on or off."
+
+    def text(k):
+        v = f.get(k)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return v.strip() if isinstance(v, str) else v
+
+    cid = text("client_id")
+    if cid is not None and (not isinstance(cid, str) or not _CLIENT_ID_RE.match(cid)):
+        errs[key + ".client_id"] = "Paste the Client ID from the Adobe Developer Console."
+    elif cid is None and out["enabled"]:
+        errs[key + ".client_id"] = "Paste the Client ID from the Adobe Developer Console."
+    out["client_id"] = cid
+    for k in ("account_id", "workspace_id"):
+        v = text(k)
+        if v is not None and (not isinstance(v, str) or not _ID_RE.match(v)):
+            errs[key + ".workspace_id"] = "Choose the workspace again."
+        out[k] = v
+    if out["enabled"] and not (out["account_id"] and out["workspace_id"]):
+        errs[key + ".workspace_id"] = "Connect Frame.io, then choose the workspace."
+    ws = text("workspace")
+    out["workspace"] = ws[:200] if isinstance(ws, str) else None
+    tpl = text("template") or "FrameIO"
+    if not isinstance(tpl, str) or "/" in tpl or len(tpl) > 100:
+        errs[key + ".template"] = "Choose a template."
+    out["template"] = tpl
+    proj = text("project") or "{job}"
+    unknown = sorted({m for m in _PLACEHOLDER_RE.findall(proj) if m not in PLACEHOLDERS}) if isinstance(proj, str) else []
+    if not isinstance(proj, str) or "/" in proj or len(proj) > 200:
+        errs[key + ".project"] = "Enter the project's name, without /."
+    elif unknown:
+        errs[key + ".project"] = "Unknown: " + ", ".join("{" + u + "}" for u in unknown) + "."
+    out["project"] = proj
+    return out
+
+
 def validate_config(inc) -> tuple[dict, dict]:
     """Validate the project_setup settings from the dashboard. Returns (clean, errors-by-field)."""
     errs: dict = {}
@@ -182,8 +233,10 @@ def validate_config(inc) -> tuple[dict, dict]:
             clean[key] = _validate_places(inc[key], f"project_setup.{key}", errs)
     if "resolve" in inc:
         clean["resolve"] = _validate_resolve(inc["resolve"], errs)
+    if "frameio" in inc:
+        clean["frameio"] = _validate_frameio(inc["frameio"], errs)
     for k in inc:
-        if k not in ("templates_dir", "drives", "extras", "resolve"):
+        if k not in ("templates_dir", "drives", "extras", "resolve", "frameio"):
             errs[f"project_setup.{k}"] = "Unknown setting."
     return clean, errs
 
@@ -240,8 +293,9 @@ class ProjectSetup:
     """Creates job folders. One per service; safe to call from the dashboard's threads."""
 
     def __init__(self, get_cfg, state_dir: Path, known_names=lambda: (), volumes: Path = Path("/Volumes"),
-                 mkdir=None, clock=None, libraries=lambda: []):
+                 mkdir=None, clock=None, libraries=lambda: [], frameio=None):
         self.get_cfg = get_cfg
+        self.frameio = frameio  # a frameio.FrameIO, or None
         self.manifest = Path(state_dir) / "created_projects.json"
         self.known_names = known_names
         self.libraries = libraries
@@ -258,10 +312,15 @@ class ProjectSetup:
     def cfg(self) -> dict:
         c = self.get_cfg().get("project_setup") or {}
         r = c.get("resolve") or {}
+        f = c.get("frameio") or {}
         return {"templates_dir": c.get("templates_dir"), "drives": list(c.get("drives") or []),
                 "extras": list(c.get("extras") or []),
                 "resolve": {"enabled": bool(r.get("enabled")), "library": r.get("library"), "template": r.get("template"),
-                            "folder": r.get("folder") or "{client_folder}/{job}", "project": r.get("project") or "{job}_CV1"}}
+                            "folder": r.get("folder") or "{client_folder}/{job}", "project": r.get("project") or "{job}_CV1"},
+                "frameio": {"enabled": bool(f.get("enabled")), "client_id": f.get("client_id"),
+                            "account_id": f.get("account_id"), "workspace_id": f.get("workspace_id"),
+                            "workspace": f.get("workspace"), "template": f.get("template") or "FrameIO",
+                            "project": f.get("project") or "{job}"}}
 
     def places(self) -> list[dict]:
         c = self.cfg()
@@ -374,7 +433,8 @@ class ProjectSetup:
         return {"config": self.cfg(), "templates": templates, "templates_problem": problem,
                 "next_job_no": next_job_number(scan["jobs"].values()), "clients": clients,
                 "placeholders": list(PLACEHOLDERS), "recent": self.recent(10), "volumes": self.volumes_list(),
-                "last_drive": self.last_drive(), "libraries": sorted(self.libraries(), key=str.lower)}
+                "last_drive": self.last_drive(), "libraries": sorted(self.libraries(), key=str.lower),
+                "frameio": self.frameio.status() if self.frameio else None}
 
     def last_drive(self) -> str | None:
         """The project drive used for the most recent job, so the list starts there."""
@@ -462,11 +522,40 @@ class ProjectSetup:
                 elif any(k.endswith(f"::{folder}/{project}") for k in self.known_names()):
                     row.update(status="exists", message="Already in Resolve. Nothing will be changed there.")
             locs.append(row)
+        fio = c["frameio"]
+        if fio["enabled"]:
+            locs.append(self._plan_frameio(fio, values, templates, problem, errs))
         # all or nothing: never leave a job half set up. Parts that already exist are left as they are.
         ready = [r for r in locs if r["status"] == "ready"]
         blocked = [r for r in locs if r["status"] not in ("ready", "exists")]
         return {"job": values["job"], "errors": errs, "warnings": warnings, "locations": locs,
                 "can_create": not errs and bool(ready) and not blocked}
+
+    def _plan_frameio(self, fio: dict, values: dict, templates: dict, problem, errs: dict) -> dict:
+        row = {"kind": "frameio", "index": 0, "name": "Frame.io", "template": fio["template"], "on": True,
+               "path": None, "project": None, "status": "ready", "message": None, "folders": 0}
+        tpl = templates.get(fio["template"])
+        if errs:
+            return {**row, "status": "waiting", "message": "Fill in the job details."}
+        name = fill(fio["project"], values)
+        row.update(project=name, path=f"{fio['workspace'] or 'Frame.io'} / {name}")
+        if not self.frameio or not self.frameio.connected():
+            return {**row, "status": "not_connected", "message": "Frame.io isn't connected. Connect it under "
+                                                                 "Templates and locations."}
+        if not (fio["account_id"] and fio["workspace_id"]):
+            return {**row, "status": "not_set_up", "message": "Choose the Frame.io workspace under Templates and "
+                                                              "locations."}
+        if tpl is None:
+            return {**row, "status": "template_missing",
+                    "message": problem or f"There's no template called {fio['template']}."}
+        try:
+            found = self.frameio.find_project(name)
+        except Exception as e:  # noqa: BLE001 (frameio.FrameIOError, or anything unexpected: still blocks)
+            return {**row, "status": "unreachable", "message": str(e) or "Couldn't reach Frame.io."}
+        if found:
+            return {**row, "status": "exists", "message": "Already in Frame.io. Nothing will be changed there.",
+                    "url": found.get("view_url")}
+        return {**row, "folders": len(tpl)}
 
     # ---- create
     def create(self, fields: dict, drive=None) -> dict:
@@ -483,6 +572,8 @@ class ProjectSetup:
             for row in p["locations"]:
                 if row["status"] != "ready":
                     continue  # made before ("exists"): left as it is
+                if row["kind"] == "frameio":
+                    continue  # last, once everything on the drives is made
                 if row["kind"] == "resolve":
                     tpl = row["template"].split("/")
                     job = {"state": "queued", "library": row["library"], "template_path": tpl[:-1],
@@ -504,6 +595,21 @@ class ProjectSetup:
                     res["error"] = PERMISSION_HELP if isinstance(e, PermissionError) else (
                         "Already exists. Nothing was changed there." if isinstance(e, FileExistsError)
                         else f"Couldn't create the folders: {e.strerror or e}.")
+            fio = next((r for r in p["locations"] if r["kind"] == "frameio" and r["status"] == "ready"), None)
+            if fio:
+                res = {"kind": "frameio", "name": "Frame.io", "path": fio["path"], "ok": False, "folders": 0,
+                       "error": None, "url": None}
+                results.append(res)
+                if failed:
+                    res["error"] = "Not made, because another part failed."
+                else:
+                    tree = [fill(rel, values) for rel in templates[fio["template"]]]
+                    try:
+                        made = self.frameio.make_project(fio["project"], tree)
+                        res.update(ok=True, folders=made["folders"], url=made.get("url"), id=made.get("id"))
+                    except Exception as e:  # noqa: BLE001 (it takes its own half-made project back)
+                        failed = True
+                        res["error"] = str(e) or "Frame.io failed."
             if failed:  # all or nothing: take back what this attempt made elsewhere, and don't make the project
                 for res, made in reversed(made_here):
                     self._remove(made)

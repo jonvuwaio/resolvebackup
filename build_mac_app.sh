@@ -14,7 +14,7 @@ python3 -m venv .build-venv
 # shellcheck disable=SC1091
 source .build-venv/bin/activate
 python -m pip install --quiet --upgrade pip
-python -m pip install --quiet pyinstaller rumps
+python -m pip install --quiet pyinstaller rumps certifi
 
 # App icon: a green dot, drawn with the standard library (same drawing the menu bar uses).
 rm -rf .icon.iconset && mkdir .icon.iconset
@@ -32,7 +32,7 @@ ICON=()
 pyinstaller --noconfirm --clean --windowed --name "Resolve Backup" \
   --osx-bundle-identifier com.resolvecloudbackup.app \
   --add-data "dashboard.html:." \
-  --hidden-import rumps --hidden-import AppKit --hidden-import Foundation \
+  --hidden-import rumps --hidden-import AppKit --hidden-import Foundation --collect-data certifi \
   "${ICON[@]}" app.py
 
 # Menu bar only: no Dock icon, no app-switcher entry.

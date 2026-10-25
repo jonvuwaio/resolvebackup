@@ -215,7 +215,7 @@ about 80 seconds hidden against about 17 minutes through an open Resolve.
 all of these, named after the job: its working folders on the workstation's RAID
 (`Projects/<Client>/<Job>`, from the `Project` template), its deliverables folders on the deliverables drive
 (`Deliverables/Projects/<Job>`, from the `Deliverables` template; exports only, never working projects) and its
-DaVinci Resolve project with the bins. Frame.io comes next.
+DaVinci Resolve project with the bins, and its Frame.io project with the review folders.
 
 1. Pick the **project drive**: the RAID of the workstation the job is on. **Add a drive…** at the bottom of the
    list offers every connected drive that isn't set up yet, already filled in as `Projects/<Client>/<Job>` with
@@ -242,6 +242,24 @@ project, so it's safe while you're working in Resolve:
 The folders are made at once; the Resolve project follows a moment later and the panel shows its progress. A
 backup check that's running stops between projects to let it through. Folders it had to make in Resolve are
 removed again if the project can't be made.
+
+**The Frame.io project** (for example `WC105_WSM_Varley_Spring26` in the chosen workspace) gets the folders of
+the `FrameIO` template (Grade, Online, VFX/TO_VFX, VFX/FROM_VFX). It's made last, once the drives are done; if Frame.io
+fails, the folders are taken back and the Resolve project isn't made, so pressing Create again starts clean. A
+project half-made in Frame.io is deleted again. Frame.io has to be reachable for Create to be on.
+
+Setting up Frame.io (once; it uses the new Frame.io with an Adobe ID):
+
+1. In the [Adobe Developer Console](https://developer.adobe.com/console), signed in with the same Adobe ID you use
+   for Frame.io, create a project, **Add API** > **Frame.io API** > **User Authentication** > **OAuth Web App**.
+2. Default redirect URI: `https://localhost:8765/frameio/callback`. Redirect URI pattern: the address shown under
+   **New project > Templates and locations > Frame.io** (normally `http://localhost:8765/frameio/callback`).
+3. In that Frame.io section, paste the **Client ID**, paste the **Client secret** and press **Save secret** (it goes
+   in the Mac keychain, never in the settings file), then **Connect Frame.io** and sign in in the tab that opens.
+4. Choose the **workspace**, tick **Also make a Frame.io project** and press **Save locations**.
+
+The app stays signed in (the sign-in is renewed by itself). If Adobe ever ends it, the Frame.io row says so and
+**Connect Frame.io** signs in again. **Disconnect** removes the sign-in from the keychain.
 
 Templates are the folders inside the templates folder (for example `/Volumes/WashDeliverables/FolderStructures`).
 Each top-level folder there is one template, and its sub-folders are copied (empty) into the new job, so changing a
@@ -284,7 +302,7 @@ Manager → *Import Project*, and pick the newest `.drp` from the project's back
 python3 -m unittest discover -s tests -v
 ```
 
-The 163 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
+The 185 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
 collaboration scenarios, backoff and alerts, `probe`, database switching, retention, caps, filters) plus the
 scheduler, the hidden-Resolve hand-over (with faked processes), the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, the installer, and new project set-up (templates, previews, creating and rolling back folders, and its dashboard API).
 

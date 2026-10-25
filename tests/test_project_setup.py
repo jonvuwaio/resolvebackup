@@ -8,6 +8,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import os  # noqa: E402
+os.environ.setdefault("RCB_NO_KEYCHAIN", "1")  # never touch the real keychain
 import project_setup as ps  # noqa: E402
 import resolve_cloud_backup as rcb  # noqa: E402
 

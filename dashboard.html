@@ -146,7 +146,7 @@ body.open #drawer, body.open-new #newDrawer { transform: none; visibility: visib
 .drawer form { overflow-y: auto; overflow-x: hidden; padding: 0 24px 24px; flex: 1; }
 .f { margin: 18px 0 0; }
 .f label, .f .lab { display: block; font-weight: 500; margin-bottom: 4px; }
-.f input[type=text], .f input[type=number], .f input[type=time], .f select, .f textarea { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 7px 10px; }
+.f input[type=text], .f input[type=password], .f input[type=number], .f input[type=time], .f select, .f textarea { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 7px 10px; }
 .f textarea { min-height: 70px; resize: vertical; }
 .f .hint { color: var(--dim); font-size: 12.5px; margin-top: 4px; }
 .f .err { color: var(--bad); font-size: 12.5px; margin-top: 4px; }
@@ -180,7 +180,7 @@ details[open] > summary { margin-bottom: 4px; }
 .ed-row { padding: 12px 0; border-top: 1px solid var(--line-soft); }
 .ed-row:first-of-type { border-top: 0; }
 .ed-row .row + .row { margin-top: 8px; }
-.ed-row input[type=text], .ed-row select { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 6px 9px; }
+.ed-row input[type=text], .ed-row input[type=password], .ed-row select { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 6px 9px; }
 .results { margin: 18px 0 0; padding: 0; list-style: none; }
 .results li { padding: 8px 0 8px 18px; border-top: 1px solid var(--line-soft); position: relative; overflow-wrap: anywhere; }
 .results li::before { content: ""; position: absolute; left: 0; top: 15px; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
@@ -190,6 +190,12 @@ details[open] > summary { margin-bottom: 4px; }
 .results li.wait::before { background: var(--run); animation: pulse 1.6s ease-in-out infinite; }
 .results li .btn { margin-top: 6px; padding: 3px 10px; }
 .chip.bad_name i { background: var(--wait); } .chip.bad_name { color: var(--wait); }
+.chip.not_connected i, .chip.not_set_up i, .chip.unreachable i { background: var(--wait); }
+.chip.not_connected, .chip.not_set_up, .chip.unreachable { color: var(--wait); }
+.where a, .results a { color: inherit; }
+.fio-status { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.fio-status .msg-line { flex: 1 1 12em; }
+code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
 
 @media (max-width: 900px) {
   .wrap { padding: 20px 16px 40px; }
@@ -393,7 +399,7 @@ details[open] > summary { margin-bottom: 4px; }
     <p class="jobname empty" id="npJob">Job name appears here</p>
     <ul class="warns" id="npWarn"></ul>
     <div class="f"><span class="lab">This job gets</span><ul class="where" id="npWhere"></ul></div>
-    <p class="soon">Frame.io set-up comes next.</p>
+    <p class="soon" id="npSoon" hidden>Frame.io isn't set up yet, so it isn't part of the job. Set it up under Templates and locations.</p>
     <ul class="results" id="npResults" hidden></ul>
     <details style="margin-top:28px" id="npEdit">
       <summary>Templates and locations</summary>
@@ -418,6 +424,23 @@ details[open] > summary { margin-bottom: 4px; }
           <div class="err" data-ederr="project_setup.resolve.folder"></div>
           <div class="row"><span style="flex:none;width:9em">Name it</span><input type="text" id="edRvProject" spellcheck="false" aria-label="Project name"></div>
           <div class="err" data-ederr="project_setup.resolve.project"></div>
+        </div></div>
+      <div class="f"><label class="check"><input type="checkbox" id="edFioOn"> Also make a Frame.io project</label>
+        <div class="hint">A project with the folders of a template, made in the chosen workspace.</div>
+        <div class="err" data-ederr="project_setup.frameio.enabled"></div>
+        <div class="ed-row" style="border:0;padding-top:6px">
+          <div class="row"><span style="flex:none;width:9em">Client ID</span><input type="text" id="edFioClient" spellcheck="false" aria-label="Frame.io client ID" placeholder="From the Adobe Developer Console"></div>
+          <div class="err" data-ederr="project_setup.frameio.client_id"></div>
+          <div class="row"><span style="flex:none;width:9em">Client secret</span><input type="password" id="edFioSecret" autocomplete="off" spellcheck="false" aria-label="Frame.io client secret"><button type="button" class="btn" id="edFioSecretSave">Save secret</button></div>
+          <div class="hint" id="edFioSecretHint"></div>
+          <div class="hint">On the Adobe credential, add this as a redirect URI pattern: <code class="sel" id="edFioRedirect"></code></div>
+          <div class="fio-status"><button type="button" class="btn" id="edFioConnect">Connect Frame.io</button><button type="button" class="btn" id="edFioDisconnect" hidden>Disconnect</button><span class="msg-line" id="edFioMsg"></span></div>
+          <div class="row" style="margin-top:10px"><span style="flex:none;width:9em">Workspace</span><select id="edFioWs" aria-label="Frame.io workspace"></select></div>
+          <div class="err" data-ederr="project_setup.frameio.workspace_id"></div>
+          <div class="row"><span style="flex:none;width:9em">Folder template</span><select id="edFioTemplate" aria-label="Frame.io folder template"></select></div>
+          <div class="err" data-ederr="project_setup.frameio.template"></div>
+          <div class="row"><span style="flex:none;width:9em">Name it</span><input type="text" id="edFioProject" spellcheck="false" aria-label="Frame.io project name"></div>
+          <div class="err" data-ederr="project_setup.frameio.project"></div>
         </div></div>
       <div class="hint" style="margin-top:14px">In paths, {job} is the job name. You can also use {client_folder}, {client}, {job_no}, {title}, {yyyy}, {mm} and {dd}.</div>
       <div class="row" style="margin-top:14px;display:flex;gap:12px;align-items:center"><button type="button" class="btn primary" id="edSave" disabled>Save locations</button><span class="msg-line" id="edMsg"></span></div>
@@ -823,7 +846,8 @@ details[open] > summary { margin-bottom: 4px; }
   const NP = { data: null, drive: null, jobId: null, clientTouched: false, touched: new Set(), showAll: false,
                timer: null, seq: 0, plan: null, busy: false, done: false, editInitial: null, opener: null };
   const STATUS_WORD = { ready: "Ready", waiting: "Waiting for the job details", exists: "Already exists",
-                        drive_missing: "Drive not connected", template_missing: "Template missing", not_writable: "Can't write here" };
+                        drive_missing: "Drive not connected", template_missing: "Template missing", not_writable: "Can't write here",
+                        not_connected: "Frame.io not connected", not_set_up: "Workspace not chosen", unreachable: "Frame.io didn't answer" };
   const npFields = () => ({ job_no: $("npJobNo").value.trim(), client_folder: $("npClientFolder").value.trim(),
                             client: $("npClient").value.trim(), title: $("npTitle").value.trim() });
   const treeText = (paths) => paths.slice().sort().map((x) => { const parts = x.split("/"); return "    ".repeat(parts.length - 1) + parts[parts.length - 1]; }).join("\n");
@@ -842,6 +866,8 @@ details[open] > summary { margin-bottom: 4px; }
     $("npJobNoHint").textContent = d.next_job_no ? `Next free number is ${d.next_job_no}` : "";
     $("npProblem").hidden = !d.templates_problem; $("npProblem").textContent = d.templates_problem || "";
     $("edChooseTemplates").hidden = !d.can_choose_folder;
+    $("npSoon").hidden = !!(c.frameio && c.frameio.enabled);
+    renderFio(d);
     if (NP.editInitial == null || JSON.stringify(collectEditor()) === NP.editInitial) {  // don't clobber unsaved edits
       renderEditor(c); NP.editInitial = JSON.stringify(collectEditor()); $("edSave").disabled = true;
     }
@@ -868,6 +894,13 @@ details[open] > summary { margin-bottom: 4px; }
       const head = h("span", { class: "name" }, r.kind === "resolve" ? "DaVinci Resolve project" : r.name);
       if (r.kind === "resolve") return h("li", {}, head, h("span", { class: "path" }, r.path || r.library),
         h("span", { class: "chip " + r.status }, h("i"), r.status === "ready" ? `Ready, a copy of ${r.template}` : st));
+      if (r.kind === "frameio") {
+        const tree = tpl[r.template];
+        return h("li", {}, h("span", { class: "name" }, "Frame.io project"),
+          r.path ? h("span", { class: "path" }, r.url ? h("a", { href: r.url, target: "_blank", rel: "noopener" }, r.path) : r.path) : null,
+          h("span", { class: "chip " + r.status }, h("i"), st),
+          tree && tree.length ? h("details", {}, h("summary", {}, `${r.template} template`), h("div", { class: "tree" }, treeText(tree))) : null);
+      }
       const tree = tpl[r.template];
       return h("li", {}, head, r.path ? h("span", { class: "path" }, r.path) : null,
         h("span", { class: "chip " + r.status }, h("i"), st),
@@ -986,6 +1019,42 @@ details[open] > summary { margin-bottom: 4px; }
     $("edRvLib").replaceChildren(h("option", { value: "" }, "Choose a library"), ...libs.map((x) => h("option", { value: x }, x)));
     $("edRvOn").checked = !!rv.enabled; $("edRvLib").value = rv.library || "";
     $("edRvTemplate").value = rv.template || ""; $("edRvFolder").value = rv.folder || "{client_folder}/{job}"; $("edRvProject").value = rv.project || "{job}_CV1";
+    const fio = c.frameio || {}, fioTpls = Object.keys((NP.data && NP.data.templates) || {});
+    if (fio.template && !fioTpls.includes(fio.template)) fioTpls.push(fio.template);
+    $("edFioOn").checked = !!fio.enabled; $("edFioClient").value = fio.client_id || "";
+    $("edFioTemplate").replaceChildren(...fioTpls.map((t) => h("option", { value: t }, t)));
+    $("edFioTemplate").value = fio.template || "FrameIO"; $("edFioProject").value = fio.project || "{job}";
+    fioWorkspaces(fio);
+  }
+  // the workspace list: the saved one, plus every one Frame.io lists once it's connected
+  function fioWorkspaces(fio) {
+    const sel = $("edFioWs"), list = (NP.fioWs || []).slice();
+    if (fio.workspace_id && !list.some((w) => w.workspace_id === fio.workspace_id))
+      list.unshift({ account_id: fio.account_id, workspace_id: fio.workspace_id, workspace: fio.workspace || fio.workspace_id, account: "" });
+    const multi = new Set(list.map((w) => w.account_id)).size > 1;
+    sel.replaceChildren(h("option", { value: "" }, list.length ? "Choose a workspace" : "Connect Frame.io to list workspaces"),
+      ...list.map((w) => h("option", { value: `${w.account_id}/${w.workspace_id}`, "data-name": w.workspace },
+        multi && w.account ? `${w.account}: ${w.workspace}` : w.workspace)));
+    sel.value = fio.workspace_id ? `${fio.account_id}/${fio.workspace_id}` : "";
+  }
+  function renderFio(d) {
+    const st = d.frameio || {};
+    $("edFioRedirect").textContent = d.frameio_redirect || "";
+    $("edFioSecretHint").textContent = st.secret ? "A secret is saved in the keychain. Enter a new one to replace it." : "Kept in the Mac keychain, not in the settings file.";
+    $("edFioSecret").placeholder = st.secret ? "Saved" : "";
+    $("edFioDisconnect").hidden = !st.connected;
+    $("edFioConnect").textContent = st.connected ? "Connect again" : "Connect Frame.io";
+    if (!NP.fioBusy) { const m = $("edFioMsg"); m.className = "msg-line" + (st.connected ? " ok" : ""); m.textContent = st.connected ? `Connected${st.user ? " as " + st.user : ""}` : "Not connected"; }
+    if (st.connected && !NP.fioWs && !NP.fioLoading) loadFioWorkspaces();
+  }
+  async function loadFioWorkspaces() {
+    NP.fioLoading = true;
+    try {
+      const r = await api("/api/frameio/workspaces");
+      if (r.ok) { NP.fioWs = r.workspaces; const cur = collectEditor().frameio; fioWorkspaces(cur); edDirty(); }
+      else { $("edFioMsg").className = "msg-line bad"; $("edFioMsg").textContent = r.error; }
+    } catch (e) { /* shown as not connected */ }
+    NP.fioLoading = false;
   }
   function collectEditor() {
     const rows = (id) => [...document.querySelectorAll(`#${id} .ed-row`)].map((r) => {
@@ -994,8 +1063,54 @@ details[open] > summary { margin-bottom: 4px; }
     });
     return { templates_dir: $("edTemplates").value.trim() || null, drives: rows("edDrives"), extras: rows("edExtras"),
              resolve: { enabled: $("edRvOn").checked, library: $("edRvLib").value || null, template: $("edRvTemplate").value.trim() || null,
-                        folder: $("edRvFolder").value.trim() || null, project: $("edRvProject").value.trim() || null } };
+                        folder: $("edRvFolder").value.trim() || null, project: $("edRvProject").value.trim() || null },
+             frameio: fioCollect() };
   }
+  function fioCollect() {
+    const o = $("edFioWs").selectedOptions[0], [acc, ws] = (o && o.value ? o.value : "/").split("/");
+    return { enabled: $("edFioOn").checked, client_id: $("edFioClient").value.trim() || null, account_id: acc || null,
+             workspace_id: ws || null, workspace: o && o.value ? o.dataset.name : null,
+             template: $("edFioTemplate").value || "FrameIO", project: $("edFioProject").value.trim() || null };
+  }
+  $("edFioSecretSave").addEventListener("click", async () => {
+    const m = $("edFioMsg"), v = $("edFioSecret").value.trim();
+    if (!v) { m.className = "msg-line bad"; m.textContent = "Paste the client secret first."; return; }
+    try {
+      const r = await api("/api/frameio/secret", { secret: v });
+      m.className = "msg-line " + (r.ok ? "ok" : "bad"); m.textContent = r.ok ? "Secret saved in the keychain." : r.error;
+      if (r.ok) { $("edFioSecret").value = ""; NP.fioBusy = true; await loadSetup(); NP.fioBusy = false; }
+    } catch (e) { m.className = "msg-line bad"; m.textContent = "Couldn't reach the backup service."; }
+  });
+  $("edFioConnect").addEventListener("click", async () => {
+    const m = $("edFioMsg");
+    const win = window.open("about:blank", "_blank");  // opened now, while it's still a click, so it isn't blocked
+    NP.fioBusy = true; NP.fioSince = NP.data.frameio && NP.data.frameio.since;
+    try {
+      const cur = collectEditor();
+      if (cur.frameio.client_id !== (NP.data.config.frameio || {}).client_id) {  // the sign-in uses the saved Client ID
+        const fio = { ...NP.data.config.frameio, client_id: cur.frameio.client_id };
+        if (!(await saveSetup({ frameio: fio }, m, "ederr", ""))) { if (win) win.close(); NP.fioBusy = false; return; }
+        NP.data.config.frameio = fio;
+      }
+      const r = await api("/api/frameio/login", {});
+      if (!r.ok) { if (win) win.close(); m.className = "msg-line bad"; m.textContent = r.error; NP.fioBusy = false; return; }
+      if (win) win.location.href = r.url; else location.assign(r.url);
+      m.className = "msg-line"; m.textContent = "Sign in with your Adobe ID in the new tab.";
+      NP.fioWs = null; pollFio(Date.now());
+    } catch (e) { if (win) win.close(); m.className = "msg-line bad"; m.textContent = "Couldn't reach the backup service."; NP.fioBusy = false; }
+  });
+  async function pollFio(started) {
+    try {
+      const d = await api("/api/project-setup");
+      if (d.frameio && d.frameio.connected && d.frameio.since !== NP.fioSince) { NP.fioBusy = false; NP.data = d; renderFio(d); schedulePreview(); return; }
+    } catch (e) { /* keep trying */ }
+    if (Date.now() - started < 10 * 60 * 1000) setTimeout(() => pollFio(started), 2000);
+    else NP.fioBusy = false;
+  }
+  $("edFioDisconnect").addEventListener("click", async () => {
+    try { await api("/api/frameio/disconnect", {}); } catch (e) { /* shown below */ }
+    NP.fioWs = null; await loadSetup(); schedulePreview();
+  });
   const edDirty = () => { $("edSave").disabled = JSON.stringify(collectEditor()) === NP.editInitial; };
   $("npEdit").addEventListener("input", edDirty);
   $("npEdit").addEventListener("change", edDirty);
@@ -1043,13 +1158,13 @@ details[open] > summary { margin-bottom: 4px; }
       const r = await api("/api/project-setup/create", { fields: npFields(), drive: NP.drive });
       if (r.results) {
         $("npResults").replaceChildren(...r.results.map((x) => h("li", { class: x.ok ? "" : "bad" },
-          x.ok ? `${x.name}: made ${plural(x.folders, "folder")}` : `${x.name}: nothing made`,
-          h("small", {}, x.ok ? x.path : (x.error || "")))));
+          x.ok ? (x.kind === "frameio" ? `Frame.io: made the project with ${plural(x.folders, "folder")}` : `${x.name}: made ${plural(x.folders, "folder")}`) : `${x.name}: nothing made`,
+          h("small", {}, x.ok ? (x.url ? h("a", { href: x.url, target: "_blank", rel: "noopener" }, x.path) : x.path) : (x.error || "")))));
         if (r.resolve) $("npResults").append(h("li", { id: "npRv" }));
         $("npResults").hidden = false; NP.done = true; NP.jobId = r.id; NP.jobName = r.job;
         const folderOk = r.results.every((x) => x.ok);
         msg.className = "msg-line " + (folderOk ? "ok" : "bad");
-        msg.textContent = !folderOk ? "Some folders weren't made. See below." : r.resolve && r.resolve.state === "queued" ? "Folders made. Making the Resolve project." : `${r.job} is set up.`;
+        msg.textContent = !folderOk ? "Nothing was made. See below." : r.resolve && r.resolve.state === "queued" ? "Folders made. Making the Resolve project." : `${r.job} is set up.`;
         if (r.resolve) renderJob(r.resolve);
         $("npCreate").textContent = "Start another";
         $("npResults").scrollIntoView({ block: "nearest" });

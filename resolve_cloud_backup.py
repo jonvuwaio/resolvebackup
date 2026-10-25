@@ -37,6 +37,7 @@ import copy
 import datetime as dt
 import fnmatch
 import hashlib
+import html
 import http.server
 import json
 import logging
@@ -57,10 +58,11 @@ import urllib.parse
 import webbrowser
 from pathlib import Path
 
+import frameio
 import project_setup
 
 APP = "resolve-cloud-backup"
-VERSION = "1.11.0"
+VERSION = "1.12.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -1547,10 +1549,12 @@ class Service:
         self.backup = Backup(self.cfg, self.dir / "state.json", connect=connect, clock=clock,
                              status=self.status, sleep=lambda s: self._stop.wait(s))
         # reads config.json itself, so a drive added from the dashboard works at once, even mid-backup
+        self.frameio = frameio.FrameIO(lambda: load_config(self.cfg_path), self.dir)
         self.setup = project_setup.ProjectSetup(
             lambda: load_config(self.cfg_path), self.dir,
             known_names=lambda: self.backup.load_state()["projects"].keys(),
-            libraries=lambda: list(self.backup.known_library_names(self.backup.load_state()).values()))
+            libraries=lambda: list(self.backup.known_library_names(self.backup.load_state()).values()),
+            frameio=self.frameio)
         self.status.set(paused=False, state="starting")
         last = self.backup.load_state().get("last_cycle")
         if last:
@@ -1872,6 +1876,10 @@ class DashboardServer:
     def url(self) -> str:
         return f"http://127.0.0.1:{self.port}/?t={self.token}"
 
+    def frameio_redirect(self) -> str:
+        """Where Adobe sends the browser back to. Must be listed on the Adobe credential."""
+        return f"http://localhost:{self.port}/frameio/callback"
+
     def stop(self) -> None:
         if self.httpd:
             self.httpd.shutdown()
@@ -1991,8 +1999,39 @@ def _make_handler(dash: DashboardServer):
                 return None
             return parsed.path, qs
 
+        def _frameio_callback(self):
+            """Where Adobe sends the browser back after signing in to Frame.io. It can't carry the dashboard's
+            token, so it's guarded by the one-time sign-in state instead."""
+            host = (self.headers.get("Host") or "").lower()
+            if host not in (f"127.0.0.1:{dash.port}", f"localhost:{dash.port}"):
+                self._send(403, {"error": "Wrong host"})
+                return
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            one = lambda k: (qs.get(k) or [""])[0][:4096]  # noqa: E731
+            if one("error"):
+                ok, text = False, f"Adobe didn't sign in: {one('error_description') or one('error')}."
+            else:
+                try:
+                    who = dash.svc.frameio.finish_login(one("code"), one("state"))
+                    ok, text = True, f"Frame.io is connected as {who}."
+                    log.info("Frame.io connected as %s", who)
+                except frameio.FrameIOError as e:
+                    ok, text = False, str(e)
+            if not ok:
+                log.warning("Frame.io sign-in failed: %s", text)
+            page = ("<!doctype html><meta charset=utf-8><title>Frame.io</title><body style=\"font:16px -apple-system,"
+                    "sans-serif;max-width:32em;margin:15vh auto;padding:0 20px\"><h1 style=\"font-size:22px\">"
+                    f"{'Connected' if ok else 'Not connected'}</h1><p>{html.escape(text)}</p><p>"
+                    f"{'You can close this tab and go back to Resolve Backup.' if ok else 'Close this tab and try Connect Frame.io again.'}"
+                    "</p></body>")
+            self._send(200 if ok else 400, page.encode("utf-8"), "text/html; charset=utf-8",
+                       {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
+
         def do_GET(self):
             try:
+                if urllib.parse.urlparse(self.path).path == "/frameio/callback":
+                    self._frameio_callback()
+                    return
                 auth = self._authorise(header_only=False)
                 if not auth:
                     return
@@ -2010,7 +2049,13 @@ def _make_handler(dash: DashboardServer):
                 elif path == "/api/settings":
                     self._send(200, dash.settings_payload())
                 elif path == "/api/project-setup":
-                    self._send(200, {**dash.svc.setup.payload(), "can_choose_folder": can_choose_folder()})
+                    self._send(200, {**dash.svc.setup.payload(), "can_choose_folder": can_choose_folder(),
+                                     "frameio_redirect": dash.frameio_redirect()})
+                elif path == "/api/frameio/workspaces":
+                    try:
+                        self._send(200, {"ok": True, "workspaces": dash.svc.frameio.workspaces()})
+                    except frameio.FrameIOError as e:
+                        self._send(200, {"ok": False, "error": str(e)})
                 elif path == "/favicon.ico":
                     self._send(204, b"", "image/x-icon")
                 else:
@@ -2061,7 +2106,10 @@ def _make_handler(dash: DashboardServer):
                     fields = body.get("fields") if isinstance(body.get("fields"), dict) else {}
                     r = svc.setup.create(fields, body.get("drive"))
                     for res in r.get("results", []):
-                        if res["ok"]:
+                        if res["ok"] and res["kind"] == "frameio":
+                            log.info("New project %s: made the Frame.io project %s with %d folders", r["job"],
+                                     res["path"], res["folders"])
+                        elif res["ok"]:
                             log.info("New project %s: made %d folders in %s", r["job"], res["folders"], res["path"])
                         else:
                             log.warning("New project %s: nothing made in %s: %s", r["job"], res["path"], res["error"])
@@ -2074,6 +2122,23 @@ def _make_handler(dash: DashboardServer):
                     if r["ok"]:
                         svc.wake.set()
                     self._send(200, r)
+                elif path == "/api/frameio/login":
+                    try:
+                        self._send(200, {"ok": True, "url": svc.frameio.login_url(dash.frameio_redirect())})
+                    except frameio.FrameIOError as e:
+                        self._send(200, {"ok": False, "error": str(e)})
+                elif path == "/api/frameio/secret":
+                    secret = body.get("secret")
+                    try:
+                        svc.frameio.save_secret(secret if isinstance(secret, str) else "")
+                        log.info("Frame.io client secret %s", "saved in the keychain" if secret else "removed")
+                        self._send(200, {"ok": True})
+                    except frameio.FrameIOError as e:
+                        self._send(200, {"ok": False, "error": str(e)})
+                elif path == "/api/frameio/disconnect":
+                    svc.frameio.disconnect()
+                    log.info("Frame.io disconnected")
+                    self._send(200, {"ok": True})
                 elif path == "/api/pause":
                     svc.set_paused(bool(body.get("paused", True)))
                     self._send(200, {"ok": True, "paused": svc.paused})
