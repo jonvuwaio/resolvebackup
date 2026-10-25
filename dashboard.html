@@ -46,6 +46,7 @@ h1 { margin: 0; font-size: 30px; line-height: 1.15; font-weight: 500; letter-spa
 .btn { border: 1px solid var(--line); background: var(--raised); border-radius: 4px; padding: 7px 14px; cursor: pointer; }
 .btn:hover:not(:disabled) { border-color: var(--faint); }
 .btn:disabled { opacity: .45; cursor: default; }
+a.btn { text-decoration: none; color: var(--text); display: inline-block; }
 .btn.primary { background: var(--run); border-color: var(--run); color: var(--on-accent); font-weight: 600; }
 .banner { margin: 18px 0 0; padding: 10px 14px; border-left: 3px solid var(--wait); background: var(--panel); }
 .banner.bad { border-color: var(--bad); }
@@ -148,6 +149,26 @@ td small { display: block; color: var(--dim); }
 body.pg-backups .bk-pill, body.pg-home .bk-pill { display: none; }
 body.pg-new #backupPage, body.pg-new #drawer, body.pg-home #backupPage, body.pg-home #drawer, body.pg-home #newDrawer { display: none; }
 body:not(.pg-home) #homePage { display: none; }
+body:not(.pg-qc) #qcPage { display: none; }
+body.pg-qc #backupPage, body.pg-qc #drawer, body.pg-qc #newDrawer { display: none; }
+#qcPage { max-width: 1100px; margin: 0 auto; padding: 28px 24px 56px; }
+#qcPage h1 { font-size: 24px; font-weight: 500; margin: 0 0 4px; }
+#qcPage h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; }
+#qcPage section { margin-top: 26px; }
+.qc-run { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 16px; }
+@media (max-width: 760px) { .qc-run { grid-template-columns: 1fr; } }
+.qc-files { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); margin-top: 10px; }
+.qc-files label { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 6px 10px; border-top: 1px solid var(--line-soft); cursor: pointer; }
+.qc-files label:first-child { border-top: 0; }
+.qc-files label:hover { background: var(--raised); }
+.qc-files .fp { overflow-wrap: anywhere; } .qc-files .fp small { display: block; color: var(--faint); }
+.qc-files .fs { color: var(--dim); font-size: 12.5px; white-space: nowrap; }
+.qc-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.chip.Passed i { background: var(--ok); } .chip.Warning i { background: var(--wait); } .chip.Warning { color: var(--wait); }
+.chip.Failed i, .chip.Reject i { background: var(--bad); } .chip.Failed, .chip.Reject { color: var(--bad); }
+.chip.Processing i, .chip.Waiting i { background: var(--run); } .chip.Processing i { animation: pulse 1.6s ease-in-out infinite; }
+#qcTbl td.fn { overflow-wrap: anywhere; } #qcTbl td.fn small { display: block; color: var(--faint); }
+.qc-tpls { columns: 2 280px; margin-top: 6px; } .qc-tpls label { display: flex; gap: 8px; align-items: baseline; font-weight: 400; break-inside: avoid; padding: 2px 0; }
 body.pg-new #newDrawer { position: static; transform: none; visibility: visible; width: auto; max-width: 760px; margin: 0 auto;
   background: transparent; border: 0; display: block; transition: none; }
 body.pg-new #newDrawer header { padding: 26px 24px 0; }
@@ -265,7 +286,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
 <body>
 <header class="appbar">
   <span class="brand">Colour Project Manager</span>
-  <nav aria-label="Pages"><a id="navHome" href="/">Home</a><a id="navNew" href="/new">New project</a><a id="navBackups" href="/backups">Backups</a></nav>
+  <nav aria-label="Pages"><a id="navHome" href="/">Home</a><a id="navNew" href="/new">New project</a><a id="navQc" href="/qc">QC</a><a id="navBackups" href="/backups">Backups</a></nav>
   <a class="bk-pill" id="bkPill" href="/backups"><i id="bkDot"></i><span id="bkText">Backups: connecting</span></a>
 </header>
 <div class="wrap" id="backupPage">
@@ -426,6 +447,11 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
       <div class="acts"><button class="btn primary" id="hRun">Back up now</button><button class="btn" id="hStop" hidden>Stop</button><button class="btn" id="hPause">Pause</button><a class="btn" id="hBackups" href="/backups">Open Backups</a></div>
     </div>
     <div class="card">
+      <h2>QC</h2>
+      <p id="hQc">Check exports with Vidchecker.</p>
+      <div class="acts"><a class="btn" id="hQcLink" href="/qc">Open QC</a></div>
+    </div>
+    <div class="card">
       <h2>New project</h2>
       <p id="hJobs">Set up a job's folders on its RAID and Deliverables, its DaVinci Resolve project and its Frame.io project.</p>
       <div class="acts"><a class="btn primary" id="hNew" href="/new">New project</a></div>
@@ -439,6 +465,33 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   <h2 id="recentH">Recent jobs</h2>
   <ul id="recentList"></ul>
 </section>
+</div>
+<div id="qcPage">
+  <h1>QC</h1>
+  <p class="hint" style="color:var(--dim);margin:0" id="qcState">Connecting to Vidchecker</p>
+  <section aria-labelledby="qcRunH">
+    <h2 id="qcRunH">Check files</h2>
+    <div class="qc-run">
+      <div class="f" style="margin:0"><label for="qcJob">Job</label><select id="qcJob"></select></div>
+      <div class="f" style="margin:0"><label for="qcTpl">Check</label><select id="qcTpl"></select></div>
+    </div>
+    <div class="qc-files" id="qcFiles" hidden></div>
+    <div class="qc-bar"><button class="btn" id="qcAll" hidden>Select all</button>
+      <button class="btn primary" id="qcStart" disabled>Run check</button><span class="msg-line" id="qcMsg"></span></div>
+  </section>
+  <section aria-labelledby="qcRecentH">
+    <div class="lib-head"><h2 id="qcRecentH" style="margin:0">Recent checks</h2><a class="btn" id="qcOpen" target="_blank" rel="noopener" hidden>Open Vidchecker for reports</a></div>
+    <div class="scroll"><table id="qcTbl"><thead><tr><th>File</th><th>Check</th><th>Started</th><th>Result</th><th class="r">Alerts</th></tr></thead><tbody id="qcRows"></tbody></table></div>
+  </section>
+  <details style="margin-top:28px" id="qcSet">
+    <summary>Vidchecker settings</summary>
+    <div class="f"><label for="qcUrl">Server</label><input type="text" id="qcUrl" spellcheck="false" placeholder="http://10.0.0.66:51060">
+      <div class="err" data-qcerr="vidchecker.url"></div></div>
+    <div class="f"><span class="lab">Checks offered here</span>
+      <div class="hint">Tick the Vidchecker templates people should pick from. Only these can be run from this app.</div>
+      <div class="qc-tpls" id="qcTpls"></div><div class="err" data-qcerr="vidchecker.templates"></div></div>
+    <div class="qc-bar"><button class="btn primary" id="qcSave">Save</button><span class="msg-line" id="qcSaveMsg"></span></div>
+  </details>
 </div>
 <main id="newDrawer" class="drawer" aria-labelledby="newH">
   <header><h2 id="newH">New project</h2></header>
@@ -541,12 +594,12 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   const $ = (id) => document.getElementById(id);
   const TOKEN = new URLSearchParams(location.search).get("t") || sessionStorage.getItem("rcbToken") || "";
   try { sessionStorage.setItem("rcbToken", TOKEN); } catch (e) { /* private mode */ }
-  const PAGES = { "/": "home", "/new": "new", "/backups": "backups" };
+  const PAGES = { "/": "home", "/new": "new", "/qc": "qc", "/backups": "backups" };
   const PAGE = PAGES[location.pathname.replace(/\/+$/, "") || "/"] || "home";
   document.body.classList.add("pg-" + PAGE);
   const link = (path) => path + "?t=" + encodeURIComponent(TOKEN);
-  for (const [id, path] of [["navHome", "/"], ["navNew", "/new"], ["navBackups", "/backups"], ["bkPill", "/backups"],
-                            ["hBackups", "/backups"], ["hNew", "/new"]]) {
+  for (const [id, path] of [["navHome", "/"], ["navNew", "/new"], ["navQc", "/qc"], ["navBackups", "/backups"],
+                            ["bkPill", "/backups"], ["hBackups", "/backups"], ["hNew", "/new"], ["hQcLink", "/qc"]]) {
     const a = document.getElementById(id); a.href = link(path);
     if (id.startsWith("nav") && PAGES[path] === PAGE) a.setAttribute("aria-current", "page");
   }
@@ -634,7 +687,8 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     $("stateText").textContent = v.text;
     $("dot").style.background = v.color;
     $("dot").classList.toggle("run", v.key === "run");
-    document.title = PAGE === "backups" ? `${v.text} · Backups` : PAGE === "new" ? "New project · Colour Project Manager" : `${v.text} · Colour Project Manager`;
+    document.title = PAGE === "backups" ? `${v.text} · Backups` : PAGE === "new" ? "New project · Colour Project Manager"
+      : PAGE === "qc" ? "QC · Colour Project Manager" : `${v.text} · Colour Project Manager`;
     $("hDot").style.background = v.color; $("hDot").className = "dot" + (v.key === "run" ? " run" : ""); $("hState").textContent = S.offline ? "Service not reachable" : v.text;
     $("bkDot").style.background = v.color; $("bkDot").classList.toggle("run", v.key === "run");
     $("bkText").textContent = S.offline ? "Backups: service not reachable" : `Backups: ${v.text.toLowerCase()}`;
@@ -1413,6 +1467,115 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     } catch (e) { /* keep the last figures */ }
   }
 
+  // ---------- QC (Vidchecker) ----------
+  const QC = { data: null, files: [], timer: null, job: null };
+  const RESULT_WORD = { Passed: "Passed", Warning: "Warning", Failed: "Failed", Reject: "Rejected" };
+  const when = (s) => { const d = date(s); return d && d.getFullYear() > 2000 ? d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : ""; };
+  function qcResultChip(t) {
+    if (t.status === "Waiting") return h("span", { class: "chip Waiting" }, h("i"), "Waiting");
+    if (t.status === "Processing") return h("span", { class: "chip Processing" }, h("i"), `Checking ${t.percent}%`);
+    return h("span", { class: "chip " + (t.result || "") }, h("i"), RESULT_WORD[t.result] || t.result || t.status || "");
+  }
+  async function loadQc() {
+    let d;
+    try { d = await api("/api/vidchecker"); } catch (e) { $("qcState").textContent = "Couldn't reach the service."; return; }
+    QC.data = d;
+    $("qcState").textContent = !d.configured ? "Set the Vidchecker server under Vidchecker settings below." : d.problem ? d.problem
+      : `Connected to Vidchecker at ${d.url}.`;
+    $("qcOpen").hidden = !d.url; if (d.url) $("qcOpen").href = d.url + "/";
+    const tsel = $("qcTpl"), keep = tsel.value;
+    tsel.replaceChildren(...(d.assigned.length ? d.assigned.map((t) => h("option", { value: String(t.id) }, t.name.replace(/^[\s*-]+/, "")))
+      : [h("option", { value: "" }, d.ok ? "No checks chosen yet: tick some in the settings below" : "Not connected")]));
+    if (keep && [...tsel.options].some((o) => o.value === keep)) tsel.value = keep;
+    const jsel = $("qcJob");
+    if (!jsel.options.length || jsel.dataset.sig !== d.jobs.join("|")) {
+      const jk = jsel.value;
+      jsel.replaceChildren(h("option", { value: "" }, d.jobs.length ? "Choose the job" : "No job folders found"), ...d.jobs.map((j) => h("option", { value: j }, j)));
+      jsel.dataset.sig = d.jobs.join("|"); if (jk) jsel.value = jk;
+    }
+    $("qcRows").replaceChildren(...d.tasks.map((t) => h("tr", {},
+      h("td", { class: "fn" }, t.name, h("small", {}, t.file ? t.file.replace(/^\/Volumes\/[^/]+\/Deliverables\/Projects\//, "") : t.server_path)),
+      h("td", {}, t.template.replace(/^[\s*-]+/, "")), h("td", {}, when(t.started)), h("td", {}, qcResultChip(t)),
+      h("td", { class: "r num" }, t.status === "Complete" ? String(t.alerts) : ""))));
+    if (!d.tasks.length) $("qcRows").append(h("tr", {}, h("td", { colspan: "5", class: "none" }, d.ok ? "No checks yet." : "")));
+    if (QC.job) renderQcFiles();
+    if (!$("qcSet").dataset.ready || !$("qcSet").open) renderQcSettings(d);
+    const busy = d.tasks.some((t) => t.status === "Waiting" || t.status === "Processing");
+    clearTimeout(QC.timer); QC.timer = setTimeout(loadQc, busy ? 4000 : 30000);
+    qcSync();
+  }
+  function lastResults() {
+    const m = new Map();
+    for (const t of (QC.data && QC.data.tasks) || []) if (t.file && !m.has(t.file)) m.set(t.file, t);
+    return m;
+  }
+  async function loadQcFiles() {
+    QC.job = $("qcJob").value || null; QC.files = [];
+    $("qcFiles").hidden = !QC.job; $("qcAll").hidden = !QC.job;
+    if (!QC.job) { qcSync(); return; }
+    $("qcFiles").replaceChildren(h("div", { class: "none" }, "Looking for exports"));
+    try { QC.files = (await api("/api/vidchecker/files?job=" + encodeURIComponent(QC.job))).files; } catch (e) { QC.files = []; }
+    renderQcFiles(true);
+  }
+  function renderQcFiles(fresh) {
+    const box = $("qcFiles"), ticked = new Set(fresh ? [] : [...box.querySelectorAll("input:checked")].map((x) => x.value)), last = lastResults();
+    box.replaceChildren(...QC.files.map((f) => {
+      const t = last.get(f.path), parts = f.rel.split("/");
+      return h("label", {}, h("input", { type: "checkbox", value: f.path, checked: ticked.has(f.path) }),
+        h("span", { class: "fp" }, parts[parts.length - 1], h("small", {}, parts.slice(0, -1).join(" / "))),
+        h("span", { class: "fs" }, bytes(f.size)), t ? qcResultChip(t) : h("span", { class: "fs" }, "Not checked"));
+    }));
+    if (!QC.files.length) box.append(h("div", { class: "none" }, "No exports (.mov, .mxf, .mp4…) in this job's Deliverables folder yet."));
+    qcSync();
+  }
+  function qcSync() {
+    const n = $("qcFiles").querySelectorAll("input:checked").length;
+    $("qcStart").disabled = !n || !$("qcTpl").value || !(QC.data && QC.data.ok);
+    $("qcStart").textContent = n > 1 ? `Run check on ${n} files` : "Run check";
+  }
+  function renderQcSettings(d) {
+    $("qcUrl").value = d.url || "";
+    const on = new Set(d.assigned.map((t) => t.id));
+    $("qcTpls").replaceChildren(...d.templates.map((t) => h("label", {}, h("input", { type: "checkbox", value: String(t.id), checked: on.has(t.id) }), t.name)));
+    if (!d.templates.length) $("qcTpls").append(h("div", { class: "hint" }, d.configured ? "Connect to the server to list its checks." : "Enter the server first."));
+    $("qcSet").dataset.ready = "1";
+  }
+  async function showQc() {
+    $("qcJob").addEventListener("change", loadQcFiles);
+    $("qcTpl").addEventListener("change", qcSync);
+    $("qcFiles").addEventListener("change", qcSync);
+    $("qcAll").addEventListener("click", () => {
+      const boxes = [...$("qcFiles").querySelectorAll("input")], all = boxes.every((b) => b.checked);
+      for (const b of boxes) b.checked = !all; qcSync();
+    });
+    $("qcStart").addEventListener("click", async () => {
+      const files = [...$("qcFiles").querySelectorAll("input:checked")].map((x) => x.value), m = $("qcMsg");
+      $("qcStart").disabled = true; m.className = "msg-line"; m.textContent = "Starting";
+      try {
+        const r = await api("/api/vidchecker/start", { files, template: Number($("qcTpl").value) });
+        const bad = r.results.filter((x) => !x.ok);
+        m.className = "msg-line " + (bad.length ? "bad" : "ok");
+        m.textContent = bad.length ? `${r.results.length - bad.length} started. ${bad.map((x) => x.file.split("/").pop() + ": " + x.error).join(" ")}`
+          : `${plural(r.results.length, "check")} started. Results appear below.`;
+        for (const b of $("qcFiles").querySelectorAll("input:checked")) b.checked = false;
+      } catch (e) { m.className = "msg-line bad"; m.textContent = (e.data && e.data.error) || "Couldn't reach the service."; }
+      loadQc();
+    });
+    $("qcSave").addEventListener("click", async () => {
+      const m = $("qcSaveMsg"); for (const e of document.querySelectorAll("[data-qcerr]")) e.textContent = "";
+      const templates = [...$("qcTpls").querySelectorAll("input:checked")].map((x) => Number(x.value));
+      try {
+        await api("/api/settings", { vidchecker: { url: $("qcUrl").value.trim() || null, templates } });
+        m.className = "msg-line ok"; m.textContent = "Saved."; $("qcSet").dataset.ready = ""; loadQc();
+      } catch (e) {
+        const errs = (e.data && e.data.errors) || {};
+        for (const [k, v] of Object.entries(errs)) { const t = document.querySelector(`[data-qcerr="${CSS.escape(k)}"]`); if (t) t.textContent = v; }
+        m.className = "msg-line bad"; m.textContent = "Not saved.";
+      }
+    });
+    loadQc();
+  }
+
   async function showHome() {
     if (location.hash === "#new") { location.replace(link("/new")); return; }  // old New project links
     loadDrives(); setInterval(loadDrives, 60000);
@@ -1424,6 +1587,16 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
       } catch (e) { /* stays as it was */ }
     };
     recent(); setInterval(recent, 60000);
+    const qc = async () => {
+      try {
+        const d = await api("/api/vidchecker?limit=20");
+        if (!d.configured) { $("hQc").textContent = "Vidchecker isn't set up yet."; return; }
+        if (!d.ok) { $("hQc").textContent = d.problem; return; }
+        const busy = d.tasks.filter((t) => t.status === "Waiting" || t.status === "Processing").length, t = d.tasks.find((x) => x.status === "Complete");
+        $("hQc").textContent = (busy ? `${plural(busy, "check")} running. ` : "") + (t ? `Last: ${t.name}, ${(RESULT_WORD[t.result] || t.result || "").toLowerCase()}.` : "No checks yet.");
+      } catch (e) { /* stays */ }
+    };
+    qc(); setInterval(qc, 30000);
   }
 
   async function showProjects() {
@@ -1455,6 +1628,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   setInterval(renderTimeline, 15000);
   pollStatus();
   if (PAGE === "new") showProjects();
+  else if (PAGE === "qc") showQc();
   else if (PAGE === "home") showHome();
   else if (location.hash === "#new") location.replace(link("/new"));  // old New project links
   else pollLibrary(true);

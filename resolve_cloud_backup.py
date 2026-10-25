@@ -60,9 +60,10 @@ from pathlib import Path
 
 import frameio
 import project_setup
+import vidchecker
 
 APP = "resolve-cloud-backup"
-VERSION = "1.17.0"
+VERSION = "1.18.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -138,6 +139,8 @@ DEFAULTS = {
     # New project set-up (dashboard > New project): folder templates, the workstation drives a job can go on,
     # and extra locations that can also get folders. See project_setup.py for the format.
     "project_setup": {"templates_dir": None, "drives": [], "extras": []},
+    # Vidchecker QC server, and the checks (template ids) offered on the QC page. See vidchecker.py.
+    "vidchecker": {"url": None, "templates": []},
 }
 
 RESERVED_WIN = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
@@ -882,7 +885,8 @@ class EventHandler(logging.Handler):
 EDITABLE = ("backup_dir", "interval_minutes", "retry_minutes", "active_hours", "off_hours_interval_minutes",
             "background_resolve", "rotate_libraries", "skip_libraries", "initial_lookback_days",
             "include", "exclude", "load_to_export", "save_open_project", "switch_database", "database",
-            "with_stills_and_luts", "max_exports_per_cycle", "min_free_gb", "retention", "project_setup")
+            "with_stills_and_luts", "max_exports_per_cycle", "min_free_gb", "retention", "project_setup",
+            "vidchecker")
 
 
 def validate_settings(inc: dict) -> tuple[dict, dict]:
@@ -972,6 +976,11 @@ def validate_settings(inc: dict) -> tuple[dict, dict]:
                                  "type": (d.get("type") or "").strip() or None}
         else:
             errs["database"] = "Invalid database settings."
+    if "vidchecker" in inc:
+        sub, sub_errs = vidchecker.validate_config(inc["vidchecker"])
+        errs.update(sub_errs)
+        if not sub_errs:
+            clean["vidchecker"] = sub
     if "project_setup" in inc:
         sub, sub_errs = project_setup.validate_config(inc["project_setup"])
         errs.update(sub_errs)
@@ -1560,6 +1569,7 @@ class Service:
                              status=self.status, sleep=lambda s: self._stop.wait(s))
         # reads config.json itself, so a drive added from the dashboard works at once, even mid-backup
         self.frameio = frameio.FrameIO(lambda: load_config(self.cfg_path), self.dir)
+        self.vidchecker = vidchecker.Vidchecker(lambda: load_config(self.cfg_path))
         self.setup = project_setup.ProjectSetup(
             lambda: load_config(self.cfg_path), self.dir,
             known_names=lambda: self.backup.load_state()["projects"].keys(),
@@ -1591,6 +1601,42 @@ class Service:
         log.info("Back up now requested")
         self.wake.set()
         return True
+
+    # ---- QC (Vidchecker): the jobs and files that can be checked
+    def _qc_bases(self) -> list[Path]:
+        """Folders that hold one folder per job (the Deliverables location: exports are checked there)."""
+        out = []
+        for loc in self.setup.cfg()["extras"]:
+            pat = loc.get("path", "")
+            if pat.endswith("/{job}") and "{" not in pat[:-len("/{job}")]:
+                out.append(Path(pat[:-len("/{job}")]))
+        return out
+
+    def qc_jobs(self, limit: int = 300) -> list[str]:
+        jobs = []
+        for base in self._qc_bases():
+            try:
+                jobs += [(d.stat().st_mtime, d.name) for d in base.iterdir() if d.is_dir() and not d.name.startswith(".")]
+            except OSError:
+                continue
+        return [n for _, n in sorted(jobs, reverse=True)][:limit]
+
+    def qc_files(self, job: str) -> list[dict]:
+        if not isinstance(job, str) or not job or "/" in job or job.startswith("."):
+            return []
+        out = []
+        for base in self._qc_bases():
+            if (base / job).is_dir():
+                out += vidchecker.media_files(base / job)
+        return out
+
+    def qc_allowed(self, path: str) -> bool:
+        """Only exported media inside a job folder can be sent for checking."""
+        try:
+            p = Path(path).resolve()
+        except (OSError, ValueError):
+            return False
+        return p.suffix.lower() in vidchecker.MEDIA and any(base.resolve() in p.parents for base in self._qc_bases())
 
     def request_stop_run(self) -> bool:
         """Stop the backup check that's running, between projects. The next one runs as scheduled."""
@@ -2060,7 +2106,7 @@ def _make_handler(dash: DashboardServer):
                 if not auth:
                     return
                 path, qs = auth
-                if path in ("/", "/new", "/backups"):
+                if path in ("/", "/new", "/qc", "/backups"):
                     csp = ("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
                            "connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'")
                     self._send(200, dash.html_path.read_bytes(), "text/html; charset=utf-8",
@@ -2076,6 +2122,19 @@ def _make_handler(dash: DashboardServer):
                     fresh = (qs.get("fresh") or [""])[0] == "1"
                     self._send(200, {**dash.svc.setup.payload(fresh), "can_choose_folder": can_choose_folder(),
                                      "frameio_redirect": dash.frameio_redirect()})
+                elif path == "/api/vidchecker":
+                    vc = dash.svc.vidchecker
+                    st = vc.status()
+                    tasks, problem = [], st["problem"]
+                    if st["ok"]:
+                        try:
+                            tasks = vc.tasks(min(200, max(1, int((qs.get("limit") or ["40"])[0] or 40))))
+                        except (vidchecker.VidcheckerError, ValueError) as e:
+                            problem = str(e)
+                    self._send(200, {**st, "problem": problem, "tasks": tasks, "url": vc.cfg()["url"],
+                                     "jobs": dash.svc.qc_jobs()})
+                elif path == "/api/vidchecker/files":
+                    self._send(200, {"files": dash.svc.qc_files((qs.get("job") or [""])[0])})
                 elif path == "/api/drives":
                     self._send(200, {"drives": dash.svc.setup.drives_status()})
                 elif path == "/api/frameio/workspaces":
@@ -2120,7 +2179,25 @@ def _make_handler(dash: DashboardServer):
                     return
                 path = auth[0]
                 svc = dash.svc
-                if path == "/api/stop-run":
+                if path == "/api/vidchecker/start":
+                    files, tpl = body.get("files"), body.get("template")
+                    if not isinstance(files, list) or not files or len(files) > 50 or not isinstance(tpl, int):
+                        self._send(400, {"error": "Choose the files and the check."})
+                        return
+                    results = []
+                    for f in files:
+                        if not isinstance(f, str) or not svc.qc_allowed(f):
+                            results.append({"file": str(f), "ok": False, "error": "Only exports in a job folder can be checked."})
+                            continue
+                        try:
+                            r = svc.vidchecker.start(f, tpl)
+                            log.info("QC: started %s on %s", r["template"], r["server_path"])
+                            results.append({"file": f, "ok": True, **r})
+                        except vidchecker.VidcheckerError as e:
+                            log.warning("QC: couldn't start a check of %s: %s", f, e)
+                            results.append({"file": f, "ok": False, "error": str(e)})
+                    self._send(200, {"ok": all(r["ok"] for r in results), "results": results})
+                elif path == "/api/stop-run":
                     self._send(200, {"ok": svc.request_stop_run()})
                 elif path == "/api/run-now":
                     self._send(200, {"ok": svc.request_run_now(), "running": svc.status.get("state") == "running"})

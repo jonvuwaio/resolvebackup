@@ -28,8 +28,8 @@ Files are written to a temporary name and renamed only when complete, so a crash
 ## See it working live
 
 - **Dashboard:** the service runs a small web page on your own machine only (`127.0.0.1`, never the network).
-  It has three pages: **Home** (the start page: backup status with Back up now / Stop / Pause, every drive's free
-  space, and the jobs made recently), **New project** and **Backups**. Drives under 15% free show amber, under 5% red; drives set up here but not connected
+  It has four pages: **Home** (the start page: backup status with Back up now / Stop / Pause, every drive's free
+  space, and the jobs made recently), **New project**, **QC** (Vidchecker checks) and **Backups**. Drives under 15% free show amber, under 5% red; drives set up here but not connected
   are listed too, and shares on the same storage say so.
   The bar at the top of every page shows whether backups are running. The Backups page shows a timeline of every check with a live playhead, what is being exported right now and how far through
   the library it is, an activity feed, every project's backup status, and a **Settings** drawer (backup folder,
@@ -292,6 +292,26 @@ A hidden (`-nogui`) Resolve stops answering scripts as soon as it opens a projec
 the hidden Resolve never opens one: projects that can only be backed up by opening them are retried once Resolve
 is open normally.
 
+## QC with Vidchecker
+
+The **QC** page runs checks on a Telestream Vidchecker server (8.x) and shows their results, without opening
+Vidchecker:
+
+1. Pick the **job** (the job folders on the deliverables drive, most recently changed first). Its exports (`.mov`,
+   `.mxf`, `.mp4`…) are listed with their last Vidchecker result, so you can see what's been checked.
+2. Pick the **check**: only the Vidchecker templates ticked under **Vidchecker settings** are offered (for example
+   the four Wash / Clearcast ones), so nobody picks the wrong one of the server's 60.
+3. Tick the files and press **Run check**. **Recent checks** shows each one waiting, checking (with progress) and
+   then Passed / Warning / Failed / Rejected with its alert count. **Open Vidchecker for reports** opens the
+   server's own page for the full report.
+
+The server runs Windows and sees the shares under its own drive letters (WashDeliverables is `W:`). The app works
+out the server's path for a file from the share it's mounted from here, and asks the server whether it can see the
+file before starting a check, so a check is never started on a path it can't open. A drive the server hasn't got
+mapped (for example Colour-3-Raid) says so. Only exports inside a job folder can be sent from this app.
+
+    "vidchecker": {"url": "http://10.0.0.66:51060", "templates": [117, 116, 111, 114]}
+
 ## Restoring locally
 
 If the cloud is unreachable: in Resolve switch to a local (Disk or PostgreSQL) database, right-click in the Project
@@ -315,7 +335,7 @@ Manager → *Import Project*, and pick the newest `.drp` from the project's back
 python3 -m unittest discover -s tests -v
 ```
 
-The 197 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
+The 208 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
 collaboration scenarios, backoff and alerts, `probe`, database switching, retention, caps, filters) plus the
 scheduler, the hidden-Resolve hand-over (with faked processes), the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, the installer, and new project set-up (templates, previews, creating and rolling back folders, and its dashboard API).
 
