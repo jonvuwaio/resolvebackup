@@ -240,7 +240,7 @@ DaVinci Resolve project with the bins, and its Frame.io project with the review 
    (budgets, contacts) stays private: make a sheet with `=IMPORTRANGE("<Job Report ID>", "CURRENT!G:G")` in A1,
    publish it to the web as CSV, and paste the link on the **Settings** page under **New project > Job list**. The list is read
    again every two minutes, or when you press **Refresh**.
-   The **DaVinci Resolve database** list picks where the Resolve project goes: the usual one (set in Settings,
+   The **DaVinci Resolve database** list picks where the Resolve project goes: the default one (set in Settings,
    where the template project lives) unless you pick another. In another database the project is made from the
    newest backup of the template project, so it needs to have been backed up once.
 3. Check the list of what the job gets and press **Create project**. It's all or nothing: Create stays off until

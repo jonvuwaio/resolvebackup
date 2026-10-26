@@ -551,7 +551,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
         <div class="hint">A copy of the template project, made without opening anything. If Resolve is closed it's started hidden for a few seconds.</div>
         <div class="err" data-ederr="project_setup.resolve.enabled"></div>
         <div class="ed-row" style="border:0;padding-top:6px">
-          <div class="row"><span style="flex:none;width:9em">Usual database</span><select id="edRvLib" aria-label="Usual database"></select></div>
+          <div class="row"><span style="flex:none;width:9em">Default database</span><select id="edRvLib" aria-label="Default database"></select></div>
           <div class="hint">Where the template project is. New projects go here unless another database is picked on New project.</div>
           <div class="err" data-ederr="project_setup.resolve.library"></div>
           <div class="row"><span style="flex:none;width:9em">Template project</span><input type="text" id="edRvTemplate" list="edRvTemplates" spellcheck="false" placeholder="Folder/Project" aria-label="Template project"><datalist id="edRvTemplates"></datalist></div>
@@ -1097,7 +1097,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     if (!rv.library) return;
     const libs = (d.libraries || []).slice();
     if (!libs.includes(rv.library)) libs.unshift(rv.library);
-    sel.replaceChildren(...libs.map((x) => h("option", { value: x }, x === rv.library ? `${x} (usual)` : x)));
+    sel.replaceChildren(...libs.map((x) => h("option", { value: x }, x === rv.library ? `${x} (default)` : x)));
     sel.value = keep && libs.includes(keep) ? keep : rv.library;
     syncLib();
   }
