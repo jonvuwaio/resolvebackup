@@ -63,7 +63,7 @@ import project_setup
 import vidchecker
 
 APP = "resolve-cloud-backup"
-VERSION = "1.21.0"
+VERSION = "1.22.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -430,24 +430,29 @@ def open_path(pm, path: list[str]) -> bool:
     return all(pm.OpenFolder(n) for n in path)
 
 
-def make_resolve_project(pm, job: dict, tmp_dir: Path) -> dict:
+def make_resolve_project(pm, job: dict, tmp_dir: Path, template_drp: Path | None = None) -> dict:
     """Copy the template project into job["folder"] as job["project"], by exporting the template and importing it
     under the new name. Nothing is ever opened, so this works in the hidden Resolve and never touches the project
     someone has open. Missing folders are made; if the project can't be made, folders made here are removed again.
+    template_drp: an export of the template to use instead, when it's in another database.
     """
     orig = current_folder_path(pm)
     made: list[list[str]] = []
-    drp = Path(tmp_dir) / "template.drp"
+    drp = Path(template_drp) if template_drp else Path(tmp_dir) / "template.drp"
     result = None
 
     def fail(msg):
         return {"state": "failed", "message": msg}
     try:
         tpl = "/".join(job["template_path"] + [job["template"]])
-        if not open_path(pm, job["template_path"]) or job["template"] not in (pm.GetProjectListInCurrentFolder() or []):
+        if template_drp:
+            if not drp.exists():
+                result = fail(f"The backup of the template project {tpl} is missing.")
+                return result
+        elif not open_path(pm, job["template_path"]) or job["template"] not in (pm.GetProjectListInCurrentFolder() or []):
             result = fail(f"The template project {tpl} isn't in {job['library']}.")
             return result
-        if not pm.ExportProject(job["template"], str(drp), True) or not drp.exists():
+        elif not pm.ExportProject(job["template"], str(drp), True) or not drp.exists():
             result = fail(f"Resolve couldn't export the template project {tpl}.")
             return result
         pm.GotoRootFolder()
@@ -1575,7 +1580,8 @@ class Service:
             known_names=lambda: self.backup.load_state()["projects"].keys(),
             libraries=lambda: list(self.backup.known_library_names(self.backup.load_state()).values()),
             frameio=self.frameio, fetch=project_setup.fetch_text,
-            library_names=lambda: self.backup.known_library_names(self.backup.load_state()))
+            library_names=lambda: self.backup.known_library_names(self.backup.load_state()),
+            template_file=self.template_backup)
         self.status.set(paused=False, state="starting")
         last = self.backup.load_state().get("last_cycle")
         if last:
@@ -1797,6 +1803,16 @@ class Service:
         finally:
             lock.release()
 
+    def template_backup(self, library: str, template: str) -> str | None:
+        """The newest backup (.drp) of a project in a library, e.g. the template project, or None."""
+        state = self.backup.load_state()
+        for db, name in self.backup.known_library_names(state).items():
+            if library in (db, name):
+                f = (state["projects"].get(f"{db}::{template}") or {}).get("last_file")
+                if f and os.path.isfile(f):
+                    return f
+        return None
+
     def _make_project(self, job: dict) -> dict:
         def fail(msg):
             return {"state": "failed", "message": msg}
@@ -1843,7 +1859,15 @@ class Service:
                             "Switch library in Resolve's Project Manager, or close Resolve, then press Retry.")
             self.setup.update_job(job["id"], detail="Making the project")
             with tempfile.TemporaryDirectory() as tmp:
-                return make_resolve_project(pm, job, Path(tmp))
+                src = None
+                if job.get("template_library") and job["template_library"] != job["library"]:
+                    tpl = "/".join(job["template_path"] + [job["template"]])
+                    backup = self.template_backup(job["template_library"], tpl)
+                    if not backup:
+                        return fail(f"There's no backup of the template project {tpl} to copy into {job['library']}.")
+                    src = Path(tmp) / "template.drp"
+                    shutil.copyfile(backup, src)  # a copy, so Resolve never works on the backup itself
+                return make_resolve_project(pm, job, Path(tmp), template_drp=src)
         finally:
             if h:
                 try:
@@ -2207,10 +2231,10 @@ def _make_handler(dash: DashboardServer):
                     self._send(200, choose_folder(start if isinstance(start, str) else None, prompt=prompt))
                 elif path == "/api/project-setup/preview":
                     fields = body.get("fields") if isinstance(body.get("fields"), dict) else {}
-                    self._send(200, svc.setup.plan(fields, body.get("drive")))
+                    self._send(200, svc.setup.plan(fields, body.get("drive"), body.get("library")))
                 elif path == "/api/project-setup/create":
                     fields = body.get("fields") if isinstance(body.get("fields"), dict) else {}
-                    r = svc.setup.create(fields, body.get("drive"))
+                    r = svc.setup.create(fields, body.get("drive"), body.get("library"))
                     for res in r.get("results", []):
                         if res["ok"] and res["kind"] == "frameio":
                             log.info("New project %s: made the Frame.io project %s with %d folders", r["job"],

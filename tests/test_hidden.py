@@ -524,6 +524,34 @@ class NewProjectServiceTests(LibraryRig):
         self.assertEqual(self.fs.procs, {42: GUI})  # their Resolve left alone
         self.assertFalse(svc.setup.retry(rid)["ok"])
 
+    def test_in_another_database_from_the_template_backup(self):
+        svc = self.service()
+        plan = svc.setup.plan(self.FIELDS, None, "WashOrgBackup_1")
+        row = plan["locations"][0]
+        self.assertEqual((row["status"], row["library"]), ("template_missing", "WashOrgBackup_1"))  # no backup of it yet
+        self.assertFalse(plan["can_create"])
+        drp = self.tmp / "out" / "ProjectTemplate__20261001.drp"
+        drp.parent.mkdir(parents=True, exist_ok=True)
+        drp.write_bytes(b"template backup")
+        st = svc.backup.load_state()
+        st["projects"][f"{dbname(A)}::Project_Template/ProjectTemplate"] = {"last_file": str(drp), "backed_up": True}
+        svc.backup.save_state(st)
+        self.pm.tree["folders"].pop("Project_Template")  # the other database hasn't got the template
+        plan = svc.setup.plan(self.FIELDS, None, "WashOrgBackup_1")
+        self.assertEqual(plan["locations"][0]["path"], "WashOrgBackup_1 / WSMLondon/WC105_WSM_Varley / WC105_WSM_Varley_CV1")
+        self.assertTrue(plan["can_create"])
+        self.assertEqual(svc.setup.create(self.FIELDS, None, "WashOrgBackup_1")["resolve"]["state"], "queued")
+        svc.tick()
+        self.assertEqual(self.opened[0][0], dbname(B))  # the hidden Resolve opened the chosen database
+        self.assertEqual(svc.setup.recent(1)[0]["resolve"]["state"], "done")
+        self.assertEqual(self.pm.imports[0][:2], (b"template backup", "WC105_WSM_Varley_CV1"))
+        self.assertTrue(drp.exists())  # the backup itself is left alone
+        self.assertEqual(self.conf.read_text(), ORIGINAL)
+
+    def test_an_unknown_database_is_refused(self):
+        row = self.service().setup.plan(self.FIELDS, None, "NotADatabase")["locations"][0]
+        self.assertEqual(row["status"], "library_missing")
+
     def test_unfinished_jobs_are_offered_for_retry_after_a_restart(self):
         svc = self.service()
         svc.setup.create(self.FIELDS)

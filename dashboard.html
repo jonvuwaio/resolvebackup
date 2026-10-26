@@ -549,7 +549,8 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
         <div class="hint">A copy of the template project, made without opening anything. If Resolve is closed it's started hidden for a few seconds.</div>
         <div class="err" data-ederr="project_setup.resolve.enabled"></div>
         <div class="ed-row" style="border:0;padding-top:6px">
-          <div class="row"><span style="flex:none;width:9em">Library</span><select id="edRvLib" aria-label="Library"></select></div>
+          <div class="row"><span style="flex:none;width:9em">Usual database</span><select id="edRvLib" aria-label="Usual database"></select></div>
+          <div class="hint">Where the template project is. New projects go here unless another database is picked on New project.</div>
           <div class="err" data-ederr="project_setup.resolve.library"></div>
           <div class="row"><span style="flex:none;width:9em">Template project</span><input type="text" id="edRvTemplate" list="edRvTemplates" spellcheck="false" placeholder="Folder/Project" aria-label="Template project"><datalist id="edRvTemplates"></datalist></div>
           <div class="err" data-ederr="project_setup.resolve.template"></div>
@@ -621,6 +622,9 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
       <input type="text" id="npClientFolder" spellcheck="false" aria-label="New client folder" placeholder="Name of the new client folder" hidden style="margin-top:8px">
       <div class="hint" id="npClientHint"></div>
       <div class="err" data-nperr="client_folder"></div></div>
+    <div class="f" id="npLibBox" hidden><label for="npLib">DaVinci Resolve database</label>
+      <select id="npLib"></select>
+      <div class="hint" id="npLibHint"></div></div>
     <ul class="warns" id="npWarn"></ul>
     <div class="f"><span class="lab">This job gets</span><ul class="where" id="npWhere"></ul></div>
     <p class="soon" id="npNoDrive" hidden>No project drives are set up yet. Add one in <a id="npNoDriveLink" href="/settings">Settings</a>.</p>
@@ -1054,7 +1058,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
                timer: null, seq: 0, plan: null, busy: false, done: false, editInitial: null, opener: null };
   const STATUS_WORD = { ready: "Ready", waiting: "Waiting for the job details", exists: "Already exists",
                         drive_missing: "Drive not connected", template_missing: "Template missing", not_writable: "Can't write here",
-                        not_connected: "Frame.io not connected", not_set_up: "Workspace not chosen", unreachable: "Frame.io didn't answer" };
+                        not_connected: "Frame.io not connected", not_set_up: "Workspace not chosen", library_missing: "Database not found", unreachable: "Frame.io didn't answer" };
   const TYPED = "__typed__", NEWC = "__new__";
   const npFields = () => ({
     job: ($("npJobSel").value === TYPED ? $("npJobName").value : $("npJobSel").value).trim(),
@@ -1084,6 +1088,24 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     $("npJobName").hidden = !typed;
     if (typed && !$("npJobName").value && d && d.next_job_no) $("npJobName").value = d.next_job_no + "_";
   }
+  // the Resolve database the job's project goes in: the one in Settings unless another is picked
+  function renderLibChoices(d) {
+    const rv = d.config.resolve || {}, sel = $("npLib"), keep = sel.value;
+    $("npLibBox").hidden = !(rv.enabled && rv.library);
+    if (!rv.library) return;
+    const libs = (d.libraries || []).slice();
+    if (!libs.includes(rv.library)) libs.unshift(rv.library);
+    sel.replaceChildren(...libs.map((x) => h("option", { value: x }, x === rv.library ? `${x} (usual)` : x)));
+    sel.value = keep && libs.includes(keep) ? keep : rv.library;
+    syncLib();
+  }
+  function syncLib() {
+    const rv = (NP.data && NP.data.config.resolve) || {};
+    $("npLibHint").textContent = $("npLib").value && $("npLib").value !== rv.library
+      ? `Made from the newest backup of the template project in ${rv.library}.` : "";
+  }
+  $("npLib").addEventListener("change", () => { syncLib(); clearDone(); schedulePreview(); });
+  const npLib = () => ($("npLibBox").hidden ? null : $("npLib").value || null);
   function renderClientChoices(d) {
     const sel = $("npClientSel"), keep = sel.value;
     sel.replaceChildren(h("option", { value: "" }, "Choose the client folder"),
@@ -1190,7 +1212,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     if (idx < 0) idx = c.drives.length ? 0 : null;
     NP.drive = idx; sel.value = idx == null ? "" : String(idx);
     $("npNoDrive").hidden = idx != null;
-    renderClientChoices(d); renderJobChoices(d);
+    renderClientChoices(d); renderJobChoices(d); renderLibChoices(d);
     $("npProblem").hidden = !d.templates_problem; $("npProblem").textContent = d.templates_problem || "";
     $("npSoon").hidden = !!(c.frameio && c.frameio.enabled);
   }
@@ -1199,7 +1221,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   async function preview() {
     const seq = ++NP.seq;
     try {
-      const p = await api("/api/project-setup/preview", { fields: npFields(), drive: NP.drive });
+      const p = await api("/api/project-setup/preview", { fields: npFields(), drive: NP.drive, library: npLib() });
       if (seq !== NP.seq) return;
       NP.plan = p; renderPlan();
     } catch (e) { $("npMsg").className = "msg-line bad"; $("npMsg").textContent = "Couldn't reach the backup service."; }
@@ -1407,7 +1429,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   $("npCreate").addEventListener("click", async () => {
     const msg = $("npMsg");
     if (NP.done) {  // start another
-      for (const id of ["npJobName", "npClientFolder", "npJobSel", "npClientSel"]) $(id).value = "";
+      for (const id of ["npJobName", "npClientFolder", "npJobSel", "npClientSel", "npLib"]) $(id).value = "";
       NP.touched.clear(); NP.showAll = false; NP.jobId = null; clearDone();
       await loadSetup(); preview(); $("npJobSel").focus(); return;
     }
@@ -1415,7 +1437,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     if (!NP.plan || !NP.plan.can_create) return;
     NP.busy = true; $("npCreate").disabled = true; msg.className = "msg-line"; msg.textContent = "Creating";
     try {
-      const r = await api("/api/project-setup/create", { fields: npFields(), drive: NP.drive });
+      const r = await api("/api/project-setup/create", { fields: npFields(), drive: NP.drive, library: npLib() });
       if (r.results) {
         $("npResults").replaceChildren(...r.results.map((x) => h("li", { class: x.ok ? "" : "bad" },
           x.ok ? (x.kind === "frameio" ? `Frame.io: made the project with ${plural(x.folders, "folder")}` : `${x.name}: made ${plural(x.folders, "folder")}`) : `${x.name}: nothing made`,

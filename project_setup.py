@@ -366,11 +366,12 @@ class ProjectSetup:
 
     def __init__(self, get_cfg, state_dir: Path, known_names=lambda: (), volumes: Path = Path("/Volumes"),
                  mkdir=None, clock=None, libraries=lambda: [], frameio=None, fetch=None, library_names=lambda: {},
-                 usage=disk_usage):
+                 usage=disk_usage, template_file=lambda library, template: None):
         self.get_cfg = get_cfg
         self.usage = usage
         self.fetch = fetch          # url -> text, for the job list; None = never fetch
         self.library_names = library_names  # {database id: library name}, to offer template projects
+        self.template_file = template_file  # (library, "Folder/Project") -> its newest backup .drp, or None
         self._jobs_cache: tuple[float, str, list] | None = None
         self._jobs_problem: str | None = None
         self.frameio = frameio  # a frameio.FrameIO, or None
@@ -646,10 +647,11 @@ class ProjectSetup:
             return []
 
     # ---- preview
-    def plan(self, fields: dict, drive=None) -> dict:
+    def plan(self, fields: dict, drive=None, library=None) -> dict:
         """What Create would do, without touching anything. Every job gets all of it: its folders on the chosen
         project drive (drive: index into drives; None = the most recently used, else the first) and on every extra
-        location, and its Resolve project if that's set up.
+        location, and its Resolve project if that's set up (library: the Resolve database to make it in; None = the
+        one in the settings, which also holds the template project).
         """
         c = self.cfg()
         errs = validate_fields(fields)
@@ -703,18 +705,27 @@ class ProjectSetup:
             locs.append(row)
         rv = c["resolve"]
         if rv["enabled"] and rv["library"] and rv["template"]:
+            lib = library if isinstance(library, str) and library else rv["library"]
             row = {"kind": "resolve", "index": 0, "name": "DaVinci Resolve", "template": rv["template"],
-                   "library": rv["library"], "on": True, "path": None, "folder": None, "project": None,
-                   "status": "ready", "message": None, "folders": 0}
+                   "library": lib, "template_library": rv["library"], "on": True, "path": None, "folder": None,
+                   "project": None, "status": "ready", "message": None, "folders": 0}
+            ids = {d for d, n in self.library_names().items() if n == lib or d == lib}
             if errs:
                 row.update(status="waiting", message="Fill in the job details.")
             else:
                 folder, project = fill(rv["folder"], values), fill(rv["project"], values)
-                row.update(folder=folder, project=project, path=f"{rv['library']} / {folder} / {project}")
+                row.update(folder=folder, project=project, path=f"{lib} / {folder} / {project}")
                 if any(not x.strip() for x in folder.split("/")) or "/" in project:
                     row.update(status="bad_name", message="The Resolve folder or project name came out empty.")
-                elif any(k.endswith(f"::{folder}/{project}") for k in self.known_names()):
+                elif lib != rv["library"] and lib not in self.libraries():
+                    row.update(status="library_missing", message=f"{lib} isn't a DaVinci Resolve database this Mac knows.")
+                elif any(k.endswith(f"::{folder}/{project}") and (not ids or k.partition("::")[0] in ids)
+                         for k in self.known_names()):
                     row.update(status="exists", message="Already in Resolve. Nothing will be changed there.")
+                elif lib != rv["library"] and not self.template_file(rv["library"], rv["template"]):
+                    # another database: the template comes from its newest backup, as it isn't in that database
+                    row.update(status="template_missing", message=f"There's no backup of the template project "
+                               f"{rv['template']} yet, so it can't be copied into {lib}.")
             locs.append(row)
         fio = c["frameio"]
         if fio["enabled"]:
@@ -752,11 +763,11 @@ class ProjectSetup:
         return {**row, "folders": len(tpl)}
 
     # ---- create
-    def create(self, fields: dict, drive=None) -> dict:
+    def create(self, fields: dict, drive=None, library=None) -> dict:
         if not self._lock.acquire(blocking=False):
             return {"ok": False, "error": "Another project is being created. Try again in a moment."}
         try:
-            p = self.plan(fields, drive)
+            p = self.plan(fields, drive, library)
             if not p["can_create"]:
                 return {"ok": False, "error": "Not everything can be made yet, so nothing was. Check the list.", "plan": p}
             values = job_values(fields, self.clock().date())
@@ -770,7 +781,8 @@ class ProjectSetup:
                     continue  # last, once everything on the drives is made
                 if row["kind"] == "resolve":
                     tpl = row["template"].split("/")
-                    job = {"state": "queued", "library": row["library"], "template_path": tpl[:-1],
+                    job = {"state": "queued", "library": row["library"], "template_library": row["template_library"],
+                           "template_path": tpl[:-1],
                            "template": tpl[-1], "folder": row["folder"].split("/"), "project": row["project"],
                            "detail": "Waiting its turn", "message": None}
                     continue
