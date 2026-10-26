@@ -263,6 +263,8 @@ body.open #drawer { transform: none; visibility: visible; }
 .where .chip { font-size: 12.5px; margin-top: 2px; }
 .chip.ready i { background: var(--ok); } .chip.waiting i { background: var(--faint); } .chip.exists i, .chip.drive_missing i, .chip.template_missing i, .chip.not_writable i { background: var(--wait); }
 .chip.exists, .chip.drive_missing, .chip.template_missing, .chip.not_writable { color: var(--wait); }
+.chip.found i { background: var(--wait); } .chip.found { color: var(--wait); }
+.chip.elsewhere i, .chip.library_missing i { background: var(--bad); } .chip.elsewhere, .chip.library_missing { color: var(--bad); }
 .tree { margin: 6px 0 0; padding: 8px 12px; background: var(--bg); border: 1px solid var(--line-soft); border-radius: 4px; font-size: 12.5px; color: var(--dim); max-height: 260px; overflow: auto; white-space: pre; }
 details summary { cursor: pointer; color: var(--dim); }
 details[open] > summary { margin-bottom: 4px; }
@@ -1058,7 +1060,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
                timer: null, seq: 0, plan: null, busy: false, done: false, editInitial: null, opener: null };
   const STATUS_WORD = { ready: "Ready", waiting: "Waiting for the job details", exists: "Already exists",
                         drive_missing: "Drive not connected", template_missing: "Template missing", not_writable: "Can't write here",
-                        not_connected: "Frame.io not connected", not_set_up: "Workspace not chosen", library_missing: "Database not found", unreachable: "Frame.io didn't answer" };
+                        not_connected: "Frame.io not connected", not_set_up: "Workspace not chosen", library_missing: "Database not found", found: "Already there", elsewhere: "Already elsewhere", unreachable: "Frame.io didn't answer" };
   const TYPED = "__typed__", NEWC = "__new__";
   const npFields = () => ({
     job: ($("npJobSel").value === TYPED ? $("npJobName").value : $("npJobSel").value).trim(),
@@ -1223,7 +1225,9 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     try {
       const p = await api("/api/project-setup/preview", { fields: npFields(), drive: NP.drive, library: npLib() });
       if (seq !== NP.seq) return;
-      NP.plan = p; renderPlan();
+      NP.plan = p;
+      if (NP.autoPlace && placeJob(p)) return;  // moved to where the job already is: preview that instead
+      renderPlan();
     } catch (e) { $("npMsg").className = "msg-line bad"; $("npMsg").textContent = "Couldn't reach the backup service."; }
   }
   function renderPlan() {
@@ -1252,9 +1256,29 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     if (!p.locations.length) $("npWhere").append(h("li", { class: "none" }, "Add a project drive to start."));
     if (!NP.done) {
       $("npCreate").disabled = !p.can_create || NP.busy;
-      const blocked = ok && p.locations.some((r) => !["ready", "exists"].includes(r.status));
+      const blocked = ok && p.locations.some((r) => !["ready", "exists", "found"].includes(r.status));
       if (!NP.busy) { $("npMsg").className = "msg-line" + (blocked ? " bad" : ""); $("npMsg").textContent = blocked ? "Everything above has to be ready before the job is made." : ""; }
     }
+  }
+
+  // a job that's already on a drive: pick that drive and its client folder, so the missing parts are finished there
+  function placeJob(p) {
+    NP.autoPlace = false;
+    if (p.job_drive == null) { $("npDriveHint").textContent = "The RAID of the workstation the job is on."; return false; }
+    let moved = false;
+    if (p.job_drive !== NP.drive && $("npDrive").querySelector(`option[value="${p.job_drive}"]`)) {
+      NP.drive = p.job_drive; $("npDrive").value = String(p.job_drive); moved = true;
+    }
+    const cf = p.job_client_folder;
+    if (cf && $("npClientSel").value !== cf && [...$("npClientSel").options].some((o) => o.value === cf)) {
+      $("npClientSel").value = cf; syncClient(); moved = true;
+    }
+    const paths = p.job_paths || [];
+    $("npDriveHint").textContent = paths.length > 1
+      ? `This job is on more than one drive: ${paths.join(", ")}. ${$("npDrive").selectedOptions[0].text} is picked.`
+      : `This job is already on ${$("npDrive").selectedOptions[0].text}, so it's picked.`;
+    if (moved) schedulePreview();
+    return moved;
   }
 
   function clearDone() {
@@ -1266,10 +1290,10 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     if (id === "npJobName" || id === "npClientFolder") { const v = ev.target.value, n = v.replace(/\s+/g, id === "npJobName" ? "_" : " "); if (n !== v) ev.target.value = n; }
     if (id === "npJobSel") {
       syncJobTyped(NP.data); renderJobChoices(NP.data);
-      if (ev.target.value && ev.target.value !== TYPED) pickClientFor(ev.target.value);
+      if (ev.target.value && ev.target.value !== TYPED) { pickClientFor(ev.target.value); NP.autoPlace = true; }
       else if (ev.target.value === TYPED) $("npJobName").focus();
     }
-    if (id === "npJobName") pickClientFor(ev.target.value);
+    if (id === "npJobName") { pickClientFor(ev.target.value); NP.autoPlace = true; }
     if (id === "npClientSel") {
       syncClient();
       if (ev.target.value === NEWC) $("npClientFolder").focus();
@@ -1291,7 +1315,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     b.disabled = false;
   });
   $("npDrive").addEventListener("change", (ev) => {
-    NP.drive = Number(ev.target.value); $("addDrive").hidden = true; clearDone(); schedulePreview();
+    NP.drive = Number(ev.target.value); NP.autoPlace = false; clearDone(); schedulePreview();
   });
 
   // add a drive

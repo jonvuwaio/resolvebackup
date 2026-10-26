@@ -285,6 +285,13 @@ Templates are the folders inside the templates folder (for example `/Volumes/Was
 Each top-level folder there is one template, and its sub-folders are copied (empty) into the new job, so changing a
 template there changes every job made after. Placeholders such as `{job}` work in template folder names too.
 
+**Finishing a job that's partly there.** Each part is looked for by the job's number (e.g. `WC092`), not just
+its exact name, so a part made earlier under another name or spelling is found: the job's folder on any project
+drive and in any client folder, its Deliverables folder, its Resolve project in any database (from the backup
+record), and its Frame.io project. Parts found are shown and left alone, and only the missing ones are made.
+Picking a job that's already on a drive picks that drive and client folder for you; making a second job folder on
+another drive or in another client folder is refused, with where the job already is.
+
 Safety: nothing is touched until **Create project**; an existing job folder is never added to; if anything fails
 part way, the folders made by that attempt are removed again (only empty folders this app just created); a job
 number already in use is flagged. Every job made is recorded in `created_projects.json` in the app's folder, and in

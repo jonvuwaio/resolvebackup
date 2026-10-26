@@ -167,6 +167,36 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(self.s.plan({**FIELDS, "job": "WC105_"})["can_create"])
         self.assertFalse(any(self.d.joinpath("Volumes/Colour-3-Raid/Projects").glob("Saatchi*")))  # touched nothing
 
+    def test_finds_the_job_by_its_number_anywhere(self):
+        vol = self.rig.vol
+        # on this drive, but in another client folder: blocked, and the page is told where it is
+        p = self.s.plan({"job": "WC095_AaronWheeler_ByFeel", "client_folder": "Aaron"}, 0)
+        self.assertEqual(p["locations"][0]["status"], "elsewhere")
+        self.assertIn("Pick the client folder AaronWheeler", p["locations"][0]["message"])
+        self.assertEqual((p["job_drive"], p["job_client_folder"]), (0, "AaronWheeler"))
+        self.assertFalse(p["can_create"])
+        # on another drive
+        (vol / "Colour-9-Raid/Projects/Acme/WC200_Acme_Spot").mkdir(parents=True)
+        self.s._scan_cache = None
+        p = self.s.plan({"job": "WC200_Acme_Spot", "client_folder": "Acme"}, 0)
+        self.assertEqual(p["locations"][0]["status"], "elsewhere")
+        self.assertIn("already on Colour-9-Raid", p["locations"][0]["message"])
+        self.assertEqual(p["job_drive"], 1)
+        # deliverables under another name, and Resolve under another spelling: left alone, the rest is made
+        (vol / "WashDeliverables/Deliverables/Projects/WC084_LadBible_Gemini").mkdir()
+        self.rig.cfg["project_setup"]["resolve"] = {"enabled": True, "library": "WashOrgSrvrDB_1",
+                                                   "template": "Project_Template/ProjectTemplate"}
+        self.s._scan_cache = None
+        p = self.s.plan({"job": "WC084_Ladbible_GoogleGemini", "client_folder": "Ladbible"}, 0)
+        st = {r["kind"]: r["status"] for r in p["locations"]}
+        self.assertEqual(st, {"drive": "ready", "extra": "found", "resolve": "found"})
+        self.assertIn("LadBible/WC084_Ladbible_GoogleGemini", next(r for r in p["locations"] if r["kind"] == "resolve")["message"])
+        self.assertTrue(p["can_create"])
+        r = self.s.create({"job": "WC084_Ladbible_GoogleGemini", "client_folder": "Ladbible"}, 0)
+        self.assertEqual([x["kind"] for x in r["results"]], ["drive"])  # only the missing part
+        self.assertIsNone(r.get("resolve"))
+        self.assertFalse((vol / "WashDeliverables/Deliverables/Projects/WC084_Ladbible_GoogleGemini").exists())
+
     def test_create_makes_the_tree_and_records_it(self):
         r = self.s.create(FIELDS, 0)
         self.assertTrue(r["ok"], r)

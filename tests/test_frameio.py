@@ -336,6 +336,21 @@ class SetupWithFrameIOTests(unittest.TestCase):
         self.rig.cfg["project_setup"]["frameio"]["enabled"] = False
         self.assertFalse(any(r["kind"] == "frameio" for r in self.s.plan(FIELDS, 0)["locations"]))
 
+    def test_found_under_another_name(self):
+        self.f.keychain.set("refresh_token", "rt-1")
+        self.fake.projects["p-old"] = {"name": "wc105 Saatchi Plusso", "root_folder_id": "r-old"}
+        self.fake.projects["p-other"] = {"name": "WC1050_Other", "root_folder_id": "r-x"}  # another number
+        p = self.s.plan(FIELDS, 0)
+        row = self.row(p)
+        self.assertEqual((row["status"], row["path"]), ("found", "Jobs / wc105 Saatchi Plusso"))
+        self.assertTrue(p["can_create"])  # the drive folders are still made
+        self.s.create(FIELDS, 0)
+        self.assertEqual(len(self.fake.projects), 2)  # no second Frame.io project
+        del self.fake.projects["p-old"]
+        self.f._cache.clear()
+        self.s._scan_cache = None
+        self.assertEqual(self.row(self.s.plan({**FIELDS, "job": "WC106_Saatchi_New"}, 0))["status"], "ready")
+
     def test_plan_and_create(self):
         self.f.keychain.set("refresh_token", "rt-1")
         p = self.s.plan(FIELDS, 0)

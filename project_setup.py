@@ -461,6 +461,12 @@ class ProjectSetup:
             return self._scan_cache[2]
         jobs: dict[str, str] = {}        # job_no -> a job name using it
         clients: dict[str, dict] = {}    # client folder -> {"client": name used in jobs, "last_job": ...}
+        where: dict[str, list] = {}      # job_no -> [(index into places(), client folder or None, job folder path)]
+        in_resolve: dict[str, list] = {}  # job_no -> ["Library / Folder/…/Project", …]
+
+        def job_no(name: str) -> str | None:
+            m = _JOB_RE.match(name)
+            return (m.group(1) + m.group(2)).upper() if m else None
 
         def note(folder: str | None, job: str) -> None:
             m = _JOB_RE.match(job)
@@ -475,14 +481,18 @@ class ProjectSetup:
                     if len(parts) > 2:
                         c["client"] = parts[1]
 
+        lib_names = self.library_names()
         for full in self.known_names():
-            path = full.partition("::")[2] or full
+            db, _, path = full.partition("::")
+            path = path or full
             segs = path.split("/")
             for i, s in enumerate(segs[:-1] or segs):
                 note(segs[0] if i == 1 else None, s)
             if len(segs) > 1:
                 clients.setdefault(segs[0], {"client": None, "last_job": None})
-        for loc in locs:
+            for no in {job_no(x) for x in segs} - {None}:  # the job's own folder, or a project named after it
+                in_resolve.setdefault(no, []).append(f"{lib_names.get(db, db)} / {path}" if path != full else path)
+        for li, loc in enumerate(locs):
             pattern = loc.get("path", "")
             head = pattern.split("{", 1)[0]
             if not head.endswith("/"):
@@ -496,9 +506,13 @@ class ProjectSetup:
                             clients.setdefault(c.name, {"client": None, "last_job": None})
                             for j in c.iterdir():
                                 note(c.name, j.name)
+                                if job_no(j.name) and j.is_dir():
+                                    where.setdefault(job_no(j.name), []).append((li, c.name, str(j)))
                 elif rest.startswith("{job}"):
                     for j in base.iterdir():
                         note(None, j.name)
+                        if job_no(j.name) and j.is_dir():
+                            where.setdefault(job_no(j.name), []).append((li, None, str(j)))
             except OSError:
                 continue
         names: set[str] = set()   # every job name seen, to tell which jobs in the list are already set up
@@ -514,7 +528,7 @@ class ProjectSetup:
                             names.update(j.name for j in c.iterdir())
             except OSError:
                 continue
-        val = {"jobs": jobs, "clients": clients, "names": names}
+        val = {"jobs": jobs, "clients": clients, "names": names, "where": where, "in_resolve": in_resolve}
         self._scan_cache = (time.monotonic(), key, val)
         return val
 
@@ -665,8 +679,12 @@ class ProjectSetup:
         values = job_values(fields, self.clock().date())
         templates, problem = self.templates()
         warnings = []
+        no = (values.get("job_no") or "").upper()
+        scan = self._scan() if no else {"where": {}, "in_resolve": {}}
+        seen = scan["where"].get(no, [])          # this job's folders already on the drives, by job number
+        n_drives = len(c["drives"])
+        on_drive = next((x for x in seen if x[0] < n_drives), None)
         if not errs:
-            scan = self._scan()
             used = scan["jobs"].get(values["job_no"])
             if used and used != values["job"]:
                 warnings.append(f"{values['job_no']} is already used by {used}.")
@@ -695,6 +713,19 @@ class ProjectSetup:
                                message=problem or f"There's no template called {loc.get('template')}.")
                 elif dest.exists():
                     row.update(status="exists", message="Already exists. Nothing will be changed there.")
+                elif kind == "drive" and on_drive:
+                    li, folder, path = on_drive
+                    if li == i:  # this drive, but another client folder or spelling
+                        row.update(status="elsewhere", message=f"This job is already on this drive, at {path}. "
+                                   f"Pick the client folder {folder} to finish it." if folder else
+                                   f"This job is already on this drive, at {path}.")
+                    else:
+                        row.update(status="elsewhere", message=f"This job is already on {c['drives'][li]['name']}, at "
+                                   f"{path}. Pick that drive to finish it.")
+                elif kind == "extra" and any(x[0] == n_drives + i for x in seen):
+                    path = next(x[2] for x in seen if x[0] == n_drives + i)
+                    row.update(status="found", path=path, message="Already there under another name. Nothing will be "
+                               "made here.")
                 else:
                     row["folders"] = len(tpl)
                     anc = dest.parent
@@ -722,6 +753,11 @@ class ProjectSetup:
                 elif any(k.endswith(f"::{folder}/{project}") and (not ids or k.partition("::")[0] in ids)
                          for k in self.known_names()):
                     row.update(status="exists", message="Already in Resolve. Nothing will be changed there.")
+                elif scan["in_resolve"].get(no):  # under another folder, name, spelling or database
+                    hits = sorted(set(scan["in_resolve"][no]))
+                    more = f" (and {len(hits) - 1} more)" if len(hits) > 1 else ""
+                    row.update(status="found", message=f"Already in Resolve as {hits[0]}{more}. Nothing will be made "
+                               "there.")
                 elif lib != rv["library"] and not self.template_file(rv["library"], rv["template"]):
                     # another database: the template comes from its newest backup, as it isn't in that database
                     row.update(status="template_missing", message=f"There's no backup of the template project "
@@ -730,11 +766,15 @@ class ProjectSetup:
         fio = c["frameio"]
         if fio["enabled"]:
             locs.append(self._plan_frameio(fio, values, templates, problem, errs))
-        # all or nothing: never leave a job half set up. Parts that already exist are left as they are.
+        # all or nothing: never leave a job half set up. Parts that already exist (here, or found by the job number
+        # under another name) are left as they are.
         ready = [r for r in locs if r["status"] == "ready"]
-        blocked = [r for r in locs if r["status"] not in ("ready", "exists")]
+        blocked = [r for r in locs if r["status"] not in ("ready", "exists", "found")]
         return {"job": values["job"], "errors": errs, "warnings": warnings, "locations": locs,
-                "can_create": not errs and bool(ready) and not blocked}
+                "can_create": not errs and bool(ready) and not blocked,
+                # where the job's folder already is, so the page can pick that drive and client folder
+                "job_drive": on_drive[0] if on_drive else None, "job_client_folder": on_drive[1] if on_drive else None,
+                "job_paths": [x[2] for x in seen if x[0] < n_drives]}
 
     def _plan_frameio(self, fio: dict, values: dict, templates: dict, problem, errs: dict) -> dict:
         row = {"kind": "frameio", "index": 0, "name": "Frame.io", "template": fio["template"], "on": True,
@@ -760,6 +800,16 @@ class ProjectSetup:
         if found:
             return {**row, "status": "exists", "message": "Already in Frame.io. Nothing will be changed there.",
                     "url": found.get("view_url")}
+        no = (values.get("job_no") or "").lower()
+        try:
+            other = next((p for p in self.frameio.projects(fio["account_id"], fio["workspace_id"])
+                          if no and re.match(re.escape(no) + r"(?!\d)", (p.get("name") or "").strip().lower())), None)
+        except Exception:  # noqa: BLE001 (already reached above; a failure here just means no match)
+            other = None
+        if other:
+            return {**row, "status": "found", "path": f"{fio['workspace'] or 'Frame.io'} / {other.get('name')}",
+                    "message": "Already in Frame.io under this name. Nothing will be made there.",
+                    "url": other.get("view_url")}
         return {**row, "folders": len(tpl)}
 
     # ---- create
