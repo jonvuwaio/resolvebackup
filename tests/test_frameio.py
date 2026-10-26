@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -190,6 +191,22 @@ class SignInTests(unittest.TestCase):
         self.assertNotIn("rt-1", (self.d / "frameio.json").read_text())  # the token is only in the keychain
         with self.assertRaises(frameio.FrameIOError):  # each sign-in link works once
             f.finish_login("good", q["state"])
+
+    def test_requests_name_the_app(self):
+        seen = {}
+
+        class R:
+            status, headers = 200, {}
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return b"{}"
+
+        def urlopen(req, **kw):
+            seen.update(req.header_items())
+            return R()
+        with mock.patch("urllib.request.urlopen", urlopen):
+            frameio.http_request("GET", "https://api.frame.io/v4/me", {"Accept": "application/json"}, None)
+        self.assertEqual(seen.get("User-agent"), frameio.USER_AGENT)  # Python's default is refused with a 403
 
     def test_without_a_secret_it_wont_start(self):
         f = make(self.d, self.fake, secret=None)

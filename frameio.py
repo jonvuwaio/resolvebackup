@@ -30,6 +30,7 @@ TOKEN_URL = IMS + "/ims/token/v3"
 API = "https://api.frame.io"
 SCOPES = "openid,email,profile,offline_access,additional_info.roles"
 KEYCHAIN_SERVICE = "Colour Project Manager Frame.io"
+USER_AGENT = "ColourProjectManager"
 LOGIN_TTL = 15 * 60          # seconds a sign-in link stays valid
 FOLDER_GAP = 0.35            # Frame.io allows 3 new folders a second
 CACHE_TTL = 60
@@ -99,7 +100,8 @@ def _ssl_context() -> ssl.SSLContext:
 
 def http_request(method: str, url: str, headers: dict, body: bytes | None, timeout: float = 20):
     """(status, headers, parsed JSON or None). Network failures raise OSError."""
-    req = urllib.request.Request(url, data=body, method=method, headers=headers)
+    # Frame.io's firewall turns away Python's own User-Agent with a bare 403, so name the app instead
+    req = urllib.request.Request(url, data=body, method=method, headers={"User-Agent": USER_AGENT, **headers})
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as r:
             raw, status, hdrs = r.read(), r.status, dict(r.headers)
