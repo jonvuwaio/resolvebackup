@@ -42,6 +42,7 @@ import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -349,8 +350,27 @@ def _write_json(path: Path, data) -> None:
     os.replace(tmp, path)
 
 
-def _volume_missing(path: Path, volumes: Path) -> str | None:
-    """The drive's name if `path` is on a drive under /Volumes that isn't connected."""
+_MOUNT_RE = re.compile(r"^//[^/\s]+/(\S.*?) on (/Volumes/.+?) \(")
+
+
+def mounted_shares(run=subprocess.run) -> dict[str, str]:
+    """{"/Volumes/Wash-Raid-6-1": "Wash-Raid-6"}: the network share connected at each mount point."""
+    try:
+        out = run(["/sbin/mount"], capture_output=True, text=True, timeout=10).stdout or ""
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    shares = {}
+    for line in out.splitlines():
+        m = _MOUNT_RE.match(line)
+        if m:
+            shares[m.group(2)] = urllib.parse.unquote(m.group(1))
+    return shares
+
+
+def _volume_missing(path: Path, volumes: Path, is_mount=lambda p: True) -> str | None:
+    """The drive's name if `path` is on a drive under /Volumes that isn't connected. A folder there that isn't a
+    mount point is a leftover on this Mac's own disk (macOS leaves one when a share drops), so it counts as missing:
+    nothing must be written to it."""
     try:
         rel = path.relative_to(volumes)
     except ValueError:
@@ -358,7 +378,7 @@ def _volume_missing(path: Path, volumes: Path) -> str | None:
     if not rel.parts:
         return None
     vol = volumes / rel.parts[0]
-    return None if vol.is_dir() else rel.parts[0]
+    return None if vol.is_dir() and is_mount(vol) else rel.parts[0]
 
 
 class ProjectSetup:
@@ -366,12 +386,15 @@ class ProjectSetup:
 
     def __init__(self, get_cfg, state_dir: Path, known_names=lambda: (), volumes: Path = Path("/Volumes"),
                  mkdir=None, clock=None, libraries=lambda: [], frameio=None, fetch=None, library_names=lambda: {},
-                 usage=disk_usage, template_file=lambda library, template: None):
+                 usage=disk_usage, template_file=lambda library, template: None, is_mount=None, shares=None):
         self.get_cfg = get_cfg
         self.usage = usage
         self.fetch = fetch          # url -> text, for the job list; None = never fetch
         self.library_names = library_names  # {database id: library name}, to offer template projects
         self.template_file = template_file  # (library, "Folder/Project") -> its newest backup .drp, or None
+        real = Path(volumes) == Path("/Volumes")  # leftover folders only matter on the real /Volumes
+        self.is_mount = is_mount or (os.path.ismount if real else (lambda p: True))
+        self.shares = shares or (mounted_shares if real else (lambda: {}))
         self._jobs_cache: tuple[float, str, list] | None = None
         self._jobs_problem: str | None = None
         self.frameio = frameio  # a frameio.FrameIO, or None
@@ -417,7 +440,7 @@ class ProjectSetup:
         out = []
         try:
             for v in sorted(self.volumes.iterdir(), key=lambda p: p.name.lower()):
-                if v.is_dir() and not _junk(v.name) and v.name not in used:
+                if v.is_dir() and not _junk(v.name) and v.name not in used and self.is_mount(v):
                     out.append({"name": v.name, "path": str(v), "has_projects": (v / "Projects").is_dir()})
         except OSError:
             pass
@@ -429,7 +452,7 @@ class ProjectSetup:
         if not d:
             return {}, "Choose the folder that holds your folder templates."
         root = Path(os.path.expanduser(d))
-        missing = _volume_missing(root, self.volumes)
+        missing = _volume_missing(root, self.volumes, self.is_mount)
         if missing:
             return {}, f"The drive {missing} isn't connected, so the templates can't be read."
         if not root.is_dir():
@@ -595,6 +618,9 @@ class ProjectSetup:
             except (OSError, subprocess.SubprocessError) as e:
                 results[v.name] = e if isinstance(e, OSError) else OSError("it didn't answer")
         vols = [v for v in vols if not (v.is_symlink() and os.path.realpath(v) == "/")]  # this Mac's own disk
+        leftovers = {v.name for v in vols if not self.is_mount(v)}  # empty folders a dropped share left behind
+        vols = [v for v in vols if v.name not in leftovers]
+        shares = self.shares()  # mount point -> share name, to spot a share connected under another name
         threads = [threading.Thread(target=measure, args=(v,), daemon=True) for v in vols]
         for t in threads:
             t.start()
@@ -612,6 +638,9 @@ class ProjectSetup:
                 row["problem"] = f"Couldn't read it: {u.strerror or u}."
             else:
                 row.update(total=u[0], free=u[2], used=u[1])
+            share = shares.get(str(v))
+            if share and share != v.name:
+                row["share"] = share  # e.g. the Wash-Raid-6 share, connected as Wash-Raid-6-1
             out.append(row)
         # shares on the same server space (identical figures): say so, so the space isn't counted twice
         for row in out:
@@ -620,7 +649,16 @@ class ProjectSetup:
                 if twins:
                     row["shares_with"] = twins
         seen = {v.name for v in vols}
-        out += [{"name": n, "roles": r, "connected": False, "total": None, "free": None, "problem": "Not connected."} for n, r in sorted(roles.items()) if n not in seen]
+        for n, r in sorted(roles.items()):
+            if n in seen:
+                continue
+            problem = "Not connected."
+            if n in leftovers:
+                other = next((o["name"] for o in out if o.get("share") == n), None)
+                problem = (f"Connected as {other} instead, so it can't be used. Eject {other} and restart this Mac, "
+                           "then connect to it again." if other else
+                           "Not connected. An empty leftover folder has its name; restarting this Mac clears it.")
+            out.append({"name": n, "roles": r, "connected": False, "total": None, "free": None, "problem": problem})
         return out
 
     def library_projects(self) -> dict:
@@ -705,7 +743,7 @@ class ProjectSetup:
             else:
                 dest = Path(fill(loc.get("path", ""), values))
                 row["path"] = str(dest)
-                gone = _volume_missing(dest, self.volumes)
+                gone = _volume_missing(dest, self.volumes, self.is_mount)
                 if gone:
                     row.update(status="drive_missing", message=f"{gone} isn't connected.")
                 elif tpl is None:

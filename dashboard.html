@@ -1527,7 +1527,8 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
           h("div", { class: "dn" }, x.name), h("div", { class: "dr" }, roles),
           h("div", { class: "meter" }, h("i", { style: `width:${used == null ? 0 : Math.round(used * 100)}%` })),
           h("div", { class: "df" }, x.problem ? x.problem : `${bytes(x.free)} free of ${bytes(x.total)}`),
-          x.shares_with ? h("small", {}, `Same storage as ${x.shares_with.join(", ")}`) : null);
+          x.shares_with ? h("small", {}, `Same storage as ${x.shares_with.join(", ")}`) : null,
+          x.share ? h("small", {}, `This is the ${x.share} share, connected under another name.`) : null);
       }));
     } catch (e) { /* keep the last figures */ }
   }

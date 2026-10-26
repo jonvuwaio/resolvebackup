@@ -380,6 +380,33 @@ class DriveTests(unittest.TestCase):
             return figures[v.name]
         self.s.usage = usage
 
+    def test_a_leftover_folder_is_not_a_drive(self):
+        # Wash-Raid-6 dropped and came back as Wash-Raid-6-1: /Volumes/Wash-Raid-6 is now an empty folder on this Mac
+        (self.rig.vol / "Wash-Raid-6-1/Projects").mkdir(parents=True)
+        self.rig.cfg["project_setup"]["drives"].append({"name": "Wash-Raid-6", "template": "Project",
+                                                         "path": str(self.rig.vol / "Wash-Raid-6/Projects/{client_folder}/{job}")})
+        s = ps.ProjectSetup(lambda: self.rig.cfg, self.rig.vol.parent, volumes=self.rig.vol, clock=lambda: TODAY,
+                            is_mount=lambda p: p.name != "Wash-Raid-6",
+                            shares=lambda: {str(self.rig.vol / "Wash-Raid-6-1"): "Wash-Raid-6"})
+        s.usage = lambda v: (60e12, 48e12, 12e12)
+        rows = {r["name"]: r for r in s.drives_status()}
+        self.assertFalse(rows["Wash-Raid-6"]["connected"])
+        self.assertIn("Connected as Wash-Raid-6-1", rows["Wash-Raid-6"]["problem"])
+        self.assertEqual(rows["Wash-Raid-6-1"]["share"], "Wash-Raid-6")
+        self.assertEqual([r["name"] for r in s.drives_status()].count("Wash-Raid-6"), 1)
+        p = s.plan(FIELDS, 2)  # never written to: it's this Mac's own disk
+        self.assertEqual(p["locations"][0]["status"], "drive_missing")
+        self.assertFalse(p["can_create"])
+        self.assertNotIn("Wash-Raid-6", [v["name"] for v in s.volumes_list()])
+
+    def test_mounted_shares(self):
+        class R:
+            stdout = ("/dev/disk1s1 on / (apfs, local)\n"
+                      "//wash@10.0.0.60/Wash-Raid-6 on /Volumes/Wash-Raid-6-1 (smbfs, nodev, nosuid, mounted by wash)\n"
+                      "//wash@host._smb._tcp.local/My%20Share on /Volumes/My Share (smbfs, nodev)\n")
+        self.assertEqual(ps.mounted_shares(run=lambda *a, **k: R()),
+                         {"/Volumes/Wash-Raid-6-1": "Wash-Raid-6", "/Volumes/My Share": "My Share"})
+
     def test_sizes_roles_and_missing_drives(self):
         rows = {r["name"]: r for r in self.s.drives_status()}
         self.assertEqual(rows["Colour-3-Raid"]["roles"], ["Projects"])
@@ -422,6 +449,7 @@ class ApiTests(unittest.TestCase):
                                                        **rig.cfg}))
             svc = rcb.Service(d / "config.json", connect=lambda c: None, state_dir=d)
             svc.setup.volumes = rig.vol
+            svc.setup.is_mount = lambda p: True
             dash = rcb.DashboardServer(svc, port=0, state_dir=d)
             dash.start()
             try:

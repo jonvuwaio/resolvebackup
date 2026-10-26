@@ -63,7 +63,7 @@ import project_setup
 import vidchecker
 
 APP = "resolve-cloud-backup"
-VERSION = "1.23.1"
+VERSION = "1.24.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
