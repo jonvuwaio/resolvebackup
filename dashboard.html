@@ -150,7 +150,15 @@ body.pg-backups .bk-pill, body.pg-home .bk-pill { display: none; }
 body.pg-new #backupPage, body.pg-new #drawer, body.pg-home #backupPage, body.pg-home #drawer, body.pg-home #newDrawer { display: none; }
 body:not(.pg-home) #homePage { display: none; }
 body:not(.pg-qc) #qcPage { display: none; }
+body:not(.pg-settings) #setPage { display: none; }
+body.pg-settings #backupPage, body.pg-settings #drawer, body.pg-settings #newDrawer { display: none; }
+body.pg-settings .bk-pill { display: none; }
 body.pg-qc #backupPage, body.pg-qc #drawer, body.pg-qc #newDrawer { display: none; }
+#setPage { max-width: 760px; margin: 0 auto; padding: 28px 24px 56px; }
+#setPage h1 { font-size: 24px; font-weight: 500; margin: 0 0 4px; }
+#setPage h2 { font-size: 17px; font-weight: 600; margin: 0 0 4px; }
+#setPage > section { margin-top: 30px; padding-top: 22px; border-top: 1px solid var(--line); }
+#setPage .steps { margin: 6px 0 0; padding-left: 1.3em; color: var(--dim); } #setPage .steps li { margin: 3px 0; }
 #qcPage { max-width: 1100px; margin: 0 auto; padding: 28px 24px 56px; }
 #qcPage h1 { font-size: 24px; font-weight: 500; margin: 0 0 4px; }
 #qcPage h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; }
@@ -286,7 +294,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
 <body>
 <header class="appbar">
   <span class="brand">Colour Project Manager</span>
-  <nav aria-label="Pages"><a id="navHome" href="/">Home</a><a id="navNew" href="/new">New project</a><a id="navQc" href="/qc">QC</a><a id="navBackups" href="/backups">Backups</a></nav>
+  <nav aria-label="Pages"><a id="navHome" href="/">Home</a><a id="navNew" href="/new">New project</a><a id="navQc" href="/qc">QC</a><a id="navBackups" href="/backups">Backups</a><a id="navSettings" href="/settings">Settings</a></nav>
   <a class="bk-pill" id="bkPill" href="/backups"><i id="bkDot"></i><span id="bkText">Backups: connecting</span></a>
 </header>
 <div class="wrap" id="backupPage">
@@ -483,15 +491,47 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     <div class="lib-head"><h2 id="qcRecentH" style="margin:0">Recent checks</h2><a class="btn" id="qcOpen" target="_blank" rel="noopener" hidden>Open Vidchecker for reports</a></div>
     <div class="scroll"><table id="qcTbl"><thead><tr><th>File</th><th>Check</th><th>Started</th><th>Result</th><th class="r">Alerts</th></tr></thead><tbody id="qcRows"></tbody></table></div>
   </section>
-  <details style="margin-top:28px" id="qcSet">
-    <summary>Vidchecker settings</summary>
+</div>
+<div id="setPage">
+  <h1>Settings</h1>
+  <section aria-labelledby="setFioH">
+    <h2 id="setFioH">Frame.io</h2>
+    <p class="hint" style="margin:0 0 10px">Makes a Frame.io project for each new job, with the folders of a template.</p>
+    <div class="fio-status"><span class="msg-line" id="edFioMsg">Connecting</span></div>
+    <details id="fioHow" style="margin-top:10px"><summary class="hint" style="cursor:pointer">How to get the Client ID and Client Secret</summary>
+      <ol class="steps">
+        <li>In the <span class="sel">developer.adobe.com/console</span>, signed in with the Adobe ID you use for Frame.io, check the organisation at the top right is Wash.</li>
+        <li>Create a project, Add API, choose Frame.io API, then User Authentication and OAuth Web App.</li>
+        <li>Default redirect URI: <code class="sel">https://localhost:8765/frameio/callback</code>. Redirect URI pattern: <code class="sel" id="edFioRedirect"></code></li>
+        <li>Copy the Client ID and Client Secret from the credential into the boxes below.</li>
+      </ol></details>
+    <div class="f"><label for="edFioClient">Client ID</label><input type="text" id="edFioClient" spellcheck="false" placeholder="From the Adobe Developer Console">
+      <div class="err" data-ederr="project_setup.frameio.client_id"></div></div>
+    <div class="f"><label for="edFioSecret">Client Secret</label><input type="password" id="edFioSecret" autocomplete="off" spellcheck="false">
+      <div class="hint" id="edFioSecretHint"></div></div>
+    <div class="qc-bar"><button type="button" class="btn primary" id="edFioConnect">Connect Frame.io</button><button type="button" class="btn" id="edFioDisconnect" hidden>Disconnect</button></div>
+    <div class="f" style="margin-top:22px"><label for="edFioWs">Workspace</label><select id="edFioWs"></select>
+      <div class="err" data-ederr="project_setup.frameio.workspace_id"></div></div>
+    <div class="f"><label for="edFioTemplate">Folder template</label><select id="edFioTemplate"></select>
+      <div class="hint">From the folder templates on the New project page.</div>
+      <div class="err" data-ederr="project_setup.frameio.template"></div></div>
+    <div class="f"><label for="edFioProject">Name it</label><input type="text" id="edFioProject" spellcheck="false">
+      <div class="hint">{job} is the job name.</div>
+      <div class="err" data-ederr="project_setup.frameio.project"></div></div>
+    <div class="f"><label class="check"><input type="checkbox" id="edFioOn"> Make a Frame.io project for every new job</label>
+      <div class="err" data-ederr="project_setup.frameio.enabled"></div></div>
+    <div class="qc-bar"><button type="button" class="btn primary" id="fioSave" disabled>Save</button><span class="msg-line" id="fioSaveMsg"></span></div>
+  </section>
+  <section aria-labelledby="setVcH">
+    <h2 id="setVcH">Vidchecker</h2>
+    <p class="hint" style="margin:0 0 10px" id="vcState">The server the QC page sends checks to.</p>
     <div class="f"><label for="qcUrl">Server</label><input type="text" id="qcUrl" spellcheck="false" placeholder="http://10.0.0.66:51060">
       <div class="err" data-qcerr="vidchecker.url"></div></div>
-    <div class="f"><span class="lab">Checks offered here</span>
+    <div class="f"><span class="lab">Checks offered on the QC page</span>
       <div class="hint">Tick the Vidchecker templates people should pick from. Only these can be run from this app.</div>
       <div class="qc-tpls" id="qcTpls"></div><div class="err" data-qcerr="vidchecker.templates"></div></div>
     <div class="qc-bar"><button class="btn primary" id="qcSave">Save</button><span class="msg-line" id="qcSaveMsg"></span></div>
-  </details>
+  </section>
 </div>
 <main id="newDrawer" class="drawer" aria-labelledby="newH">
   <header><h2 id="newH">New project</h2></header>
@@ -526,7 +566,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
       <div class="err" data-nperr="client_folder"></div></div>
     <ul class="warns" id="npWarn"></ul>
     <div class="f"><span class="lab">This job gets</span><ul class="where" id="npWhere"></ul></div>
-    <p class="soon" id="npSoon" hidden>Frame.io isn't set up yet, so it isn't part of the job. Set it up under Templates and locations.</p>
+    <p class="soon" id="npSoon" hidden>Frame.io isn't set up yet, so it isn't part of the job. Set it up in <a id="npSoonLink" href="/settings">Settings</a>.</p>
     <ul class="results" id="npResults" hidden></ul>
     <details style="margin-top:28px" id="npEdit">
       <summary>Templates and locations</summary>
@@ -564,23 +604,6 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
           <div class="row"><span style="flex:none;width:9em">Name it</span><input type="text" id="edRvProject" spellcheck="false" aria-label="Project name"></div>
           <div class="err" data-ederr="project_setup.resolve.project"></div>
         </div></div>
-      <div class="f"><label class="check"><input type="checkbox" id="edFioOn"> Also make a Frame.io project</label>
-        <div class="hint">A project with the folders of a template, made in the chosen workspace.</div>
-        <div class="err" data-ederr="project_setup.frameio.enabled"></div>
-        <div class="ed-row" style="border:0;padding-top:6px">
-          <div class="row"><span style="flex:none;width:9em">Client ID</span><input type="text" id="edFioClient" spellcheck="false" aria-label="Frame.io client ID" placeholder="From the Adobe Developer Console"></div>
-          <div class="err" data-ederr="project_setup.frameio.client_id"></div>
-          <div class="row"><span style="flex:none;width:9em">Client secret</span><input type="password" id="edFioSecret" autocomplete="off" spellcheck="false" aria-label="Frame.io client secret"><button type="button" class="btn" id="edFioSecretSave">Save secret</button></div>
-          <div class="hint" id="edFioSecretHint"></div>
-          <div class="hint">On the Adobe credential, add this as a redirect URI pattern: <code class="sel" id="edFioRedirect"></code></div>
-          <div class="fio-status"><button type="button" class="btn" id="edFioConnect">Connect Frame.io</button><button type="button" class="btn" id="edFioDisconnect" hidden>Disconnect</button><span class="msg-line" id="edFioMsg"></span></div>
-          <div class="row" style="margin-top:10px"><span style="flex:none;width:9em">Workspace</span><select id="edFioWs" aria-label="Frame.io workspace"></select></div>
-          <div class="err" data-ederr="project_setup.frameio.workspace_id"></div>
-          <div class="row"><span style="flex:none;width:9em">Folder template</span><select id="edFioTemplate" aria-label="Frame.io folder template"></select></div>
-          <div class="err" data-ederr="project_setup.frameio.template"></div>
-          <div class="row"><span style="flex:none;width:9em">Name it</span><input type="text" id="edFioProject" spellcheck="false" aria-label="Frame.io project name"></div>
-          <div class="err" data-ederr="project_setup.frameio.project"></div>
-        </div></div>
       <div class="hint" style="margin-top:14px">In paths, {job} is the job name. You can also use {client_folder}, {client}, {job_no}, {title}, {yyyy}, {mm} and {dd}.</div>
       <div class="row" style="margin-top:14px;display:flex;gap:12px;align-items:center"><button type="button" class="btn primary" id="edSave" disabled>Save locations</button><span class="msg-line" id="edMsg"></span></div>
     </details>
@@ -594,11 +617,12 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   const $ = (id) => document.getElementById(id);
   const TOKEN = new URLSearchParams(location.search).get("t") || sessionStorage.getItem("rcbToken") || "";
   try { sessionStorage.setItem("rcbToken", TOKEN); } catch (e) { /* private mode */ }
-  const PAGES = { "/": "home", "/new": "new", "/qc": "qc", "/backups": "backups" };
+  const PAGES = { "/": "home", "/new": "new", "/qc": "qc", "/settings": "settings", "/backups": "backups" };
   const PAGE = PAGES[location.pathname.replace(/\/+$/, "") || "/"] || "home";
   document.body.classList.add("pg-" + PAGE);
   const link = (path) => path + "?t=" + encodeURIComponent(TOKEN);
-  for (const [id, path] of [["navHome", "/"], ["navNew", "/new"], ["navQc", "/qc"], ["navBackups", "/backups"],
+  for (const [id, path] of [["navHome", "/"], ["navNew", "/new"], ["navQc", "/qc"], ["navBackups", "/backups"], ["navSettings", "/settings"],
+                            ["npSoonLink", "/settings"],
                             ["bkPill", "/backups"], ["hBackups", "/backups"], ["hNew", "/new"], ["hQcLink", "/qc"]]) {
     const a = document.getElementById(id); a.href = link(path);
     if (id.startsWith("nav") && PAGES[path] === PAGE) a.setAttribute("aria-current", "page");
@@ -688,7 +712,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     $("dot").style.background = v.color;
     $("dot").classList.toggle("run", v.key === "run");
     document.title = PAGE === "backups" ? `${v.text} · Backups` : PAGE === "new" ? "New project · Colour Project Manager"
-      : PAGE === "qc" ? "QC · Colour Project Manager" : `${v.text} · Colour Project Manager`;
+      : PAGE === "qc" ? "QC · Colour Project Manager" : PAGE === "settings" ? "Settings · Colour Project Manager" : `${v.text} · Colour Project Manager`;
     $("hDot").style.background = v.color; $("hDot").className = "dot" + (v.key === "run" ? " run" : ""); $("hState").textContent = S.offline ? "Service not reachable" : v.text;
     $("bkDot").style.background = v.color; $("bkDot").classList.toggle("run", v.key === "run");
     $("bkText").textContent = S.offline ? "Backups: service not reachable" : `Backups: ${v.text.toLowerCase()}`;
@@ -1084,7 +1108,6 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     $("npProblem").hidden = !d.templates_problem; $("npProblem").textContent = d.templates_problem || "";
     $("edChooseTemplates").hidden = !d.can_choose_folder;
     $("npSoon").hidden = !!(c.frameio && c.frameio.enabled);
-    renderFio(d);
     if (NP.editInitial == null || JSON.stringify(collectEditor()) === NP.editInitial) {  // don't clobber unsaved edits
       renderEditor(c); NP.editInitial = JSON.stringify(collectEditor()); $("edSave").disabled = true;
     }
@@ -1252,42 +1275,6 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     $("edRvOn").checked = !!rv.enabled; $("edRvLib").value = rv.library || "";
     rvTemplates();
     $("edRvTemplate").value = rv.template || ""; $("edRvFolder").value = rv.folder || "{client_folder}/{job}"; $("edRvProject").value = rv.project || "{job}_CV1";
-    const fio = c.frameio || {}, fioTpls = Object.keys((NP.data && NP.data.templates) || {});
-    if (fio.template && !fioTpls.includes(fio.template)) fioTpls.push(fio.template);
-    $("edFioOn").checked = !!fio.enabled; $("edFioClient").value = fio.client_id || "";
-    $("edFioTemplate").replaceChildren(...fioTpls.map((t) => h("option", { value: t }, t)));
-    $("edFioTemplate").value = fio.template || "FrameIO"; $("edFioProject").value = fio.project || "{job}";
-    fioWorkspaces(fio);
-  }
-  // the workspace list: the saved one, plus every one Frame.io lists once it's connected
-  function fioWorkspaces(fio) {
-    const sel = $("edFioWs"), list = (NP.fioWs || []).slice();
-    if (fio.workspace_id && !list.some((w) => w.workspace_id === fio.workspace_id))
-      list.unshift({ account_id: fio.account_id, workspace_id: fio.workspace_id, workspace: fio.workspace || fio.workspace_id, account: "" });
-    const multi = new Set(list.map((w) => w.account_id)).size > 1;
-    sel.replaceChildren(h("option", { value: "" }, list.length ? "Choose a workspace" : "Connect Frame.io to list workspaces"),
-      ...list.map((w) => h("option", { value: `${w.account_id}/${w.workspace_id}`, "data-name": w.workspace },
-        multi && w.account ? `${w.account}: ${w.workspace}` : w.workspace)));
-    sel.value = fio.workspace_id ? `${fio.account_id}/${fio.workspace_id}` : "";
-  }
-  function renderFio(d) {
-    const st = d.frameio || {};
-    $("edFioRedirect").textContent = d.frameio_redirect || "";
-    $("edFioSecretHint").textContent = st.secret ? "A secret is saved in the keychain. Enter a new one to replace it." : "Kept in the Mac keychain, not in the settings file.";
-    $("edFioSecret").placeholder = st.secret ? "Saved" : "";
-    $("edFioDisconnect").hidden = !st.connected;
-    $("edFioConnect").textContent = st.connected ? "Connect again" : "Connect Frame.io";
-    if (!NP.fioBusy) { const m = $("edFioMsg"); m.className = "msg-line" + (st.connected ? " ok" : ""); m.textContent = st.connected ? `Connected${st.user ? " as " + st.user : ""}` : "Not connected"; }
-    if (st.connected && !NP.fioWs && !NP.fioLoading) loadFioWorkspaces();
-  }
-  async function loadFioWorkspaces() {
-    NP.fioLoading = true;
-    try {
-      const r = await api("/api/frameio/workspaces");
-      if (r.ok) { NP.fioWs = r.workspaces; const cur = collectEditor().frameio; fioWorkspaces(cur); edDirty(); }
-      else { $("edFioMsg").className = "msg-line bad"; $("edFioMsg").textContent = r.error; }
-    } catch (e) { /* shown as not connected */ }
-    NP.fioLoading = false;
   }
   // template projects: the projects of the chosen library, as seen by backups
   function rvTemplates() {
@@ -1304,54 +1291,8 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     return { templates_dir: $("edTemplates").value.trim() || null, job_list_url: $("edJobList").value.trim() || null,
              drives: rows("edDrives"), extras: rows("edExtras"),
              resolve: { enabled: $("edRvOn").checked, library: $("edRvLib").value || null, template: $("edRvTemplate").value.trim() || null,
-                        folder: $("edRvFolder").value.trim() || null, project: $("edRvProject").value.trim() || null },
-             frameio: fioCollect() };
+                        folder: $("edRvFolder").value.trim() || null, project: $("edRvProject").value.trim() || null } };
   }
-  function fioCollect() {
-    const o = $("edFioWs").selectedOptions[0], [acc, ws] = (o && o.value ? o.value : "/").split("/");
-    return { enabled: $("edFioOn").checked, client_id: $("edFioClient").value.trim() || null, account_id: acc || null,
-             workspace_id: ws || null, workspace: o && o.value ? o.dataset.name : null,
-             template: $("edFioTemplate").value || "FrameIO", project: $("edFioProject").value.trim() || null };
-  }
-  $("edFioSecretSave").addEventListener("click", async () => {
-    const m = $("edFioMsg"), v = $("edFioSecret").value.trim();
-    if (!v) { m.className = "msg-line bad"; m.textContent = "Paste the client secret first."; return; }
-    try {
-      const r = await api("/api/frameio/secret", { secret: v });
-      m.className = "msg-line " + (r.ok ? "ok" : "bad"); m.textContent = r.ok ? "Secret saved in the keychain." : r.error;
-      if (r.ok) { $("edFioSecret").value = ""; NP.fioBusy = true; await loadSetup(); NP.fioBusy = false; }
-    } catch (e) { m.className = "msg-line bad"; m.textContent = "Couldn't reach the backup service."; }
-  });
-  $("edFioConnect").addEventListener("click", async () => {
-    const m = $("edFioMsg");
-    const win = window.open("about:blank", "_blank");  // opened now, while it's still a click, so it isn't blocked
-    NP.fioBusy = true; NP.fioSince = NP.data.frameio && NP.data.frameio.since;
-    try {
-      const cur = collectEditor();
-      if (cur.frameio.client_id !== (NP.data.config.frameio || {}).client_id) {  // the sign-in uses the saved Client ID
-        const fio = { ...NP.data.config.frameio, client_id: cur.frameio.client_id };
-        if (!(await saveSetup({ frameio: fio }, m, "ederr", ""))) { if (win) win.close(); NP.fioBusy = false; return; }
-        NP.data.config.frameio = fio;
-      }
-      const r = await api("/api/frameio/login", {});
-      if (!r.ok) { if (win) win.close(); m.className = "msg-line bad"; m.textContent = r.error; NP.fioBusy = false; return; }
-      if (win) win.location.href = r.url; else location.assign(r.url);
-      m.className = "msg-line"; m.textContent = "Sign in with your Adobe ID in the new tab.";
-      NP.fioWs = null; pollFio(Date.now());
-    } catch (e) { if (win) win.close(); m.className = "msg-line bad"; m.textContent = "Couldn't reach the backup service."; NP.fioBusy = false; }
-  });
-  async function pollFio(started) {
-    try {
-      const d = await api("/api/project-setup");
-      if (d.frameio && d.frameio.connected && d.frameio.since !== NP.fioSince) { NP.fioBusy = false; NP.data = d; renderFio(d); schedulePreview(); return; }
-    } catch (e) { /* keep trying */ }
-    if (Date.now() - started < 10 * 60 * 1000) setTimeout(() => pollFio(started), 2000);
-    else NP.fioBusy = false;
-  }
-  $("edFioDisconnect").addEventListener("click", async () => {
-    try { await api("/api/frameio/disconnect", {}); } catch (e) { /* shown below */ }
-    NP.fioWs = null; await loadSetup(); schedulePreview();
-  });
   const edDirty = () => { $("edSave").disabled = JSON.stringify(collectEditor()) === NP.editInitial; };
   $("npEdit").addEventListener("input", edDirty);
   $("npEdit").addEventListener("change", edDirty);
@@ -1480,12 +1421,12 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     let d;
     try { d = await api("/api/vidchecker"); } catch (e) { $("qcState").textContent = "Couldn't reach the service."; return; }
     QC.data = d;
-    $("qcState").textContent = !d.configured ? "Set the Vidchecker server under Vidchecker settings below." : d.problem ? d.problem
+    $("qcState").textContent = !d.configured ? "Set the Vidchecker server in Settings." : d.problem ? d.problem
       : `Connected to Vidchecker at ${d.url}.`;
     $("qcOpen").hidden = !d.url; if (d.url) $("qcOpen").href = d.url + "/";
     const tsel = $("qcTpl"), keep = tsel.value;
     tsel.replaceChildren(...(d.assigned.length ? d.assigned.map((t) => h("option", { value: String(t.id) }, t.name.replace(/^[\s*-]+/, "")))
-      : [h("option", { value: "" }, d.ok ? "No checks chosen yet: tick some in the settings below" : "Not connected")]));
+      : [h("option", { value: "" }, d.ok ? "No checks chosen yet: tick some in Settings" : "Not connected")]));
     if (keep && [...tsel.options].some((o) => o.value === keep)) tsel.value = keep;
     const jsel = $("qcJob");
     if (!jsel.options.length || jsel.dataset.sig !== d.jobs.join("|")) {
@@ -1499,7 +1440,6 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
       h("td", { class: "r num" }, t.status === "Complete" ? String(t.alerts) : ""))));
     if (!d.tasks.length) $("qcRows").append(h("tr", {}, h("td", { colspan: "5", class: "none" }, d.ok ? "No checks yet." : "")));
     if (QC.job) renderQcFiles();
-    if (!$("qcSet").dataset.ready || !$("qcSet").open) renderQcSettings(d);
     const busy = d.tasks.some((t) => t.status === "Waiting" || t.status === "Processing");
     clearTimeout(QC.timer); QC.timer = setTimeout(loadQc, busy ? 4000 : 30000);
     qcSync();
@@ -1538,7 +1478,6 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     const on = new Set(d.assigned.map((t) => t.id));
     $("qcTpls").replaceChildren(...d.templates.map((t) => h("label", {}, h("input", { type: "checkbox", value: String(t.id), checked: on.has(t.id) }), t.name)));
     if (!d.templates.length) $("qcTpls").append(h("div", { class: "hint" }, d.configured ? "Connect to the server to list its checks." : "Enter the server first."));
-    $("qcSet").dataset.ready = "1";
   }
   async function showQc() {
     $("qcJob").addEventListener("change", loadQcFiles);
@@ -1561,19 +1500,133 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
       } catch (e) { m.className = "msg-line bad"; m.textContent = (e.data && e.data.error) || "Couldn't reach the service."; }
       loadQc();
     });
+    loadQc();
+  }
+
+  // ---------- settings ----------
+  const SET = { data: null, initial: null, ws: null, wsLoading: false, busy: false, since: null };
+  async function loadSettings() {
+    const d = await api("/api/project-setup"); SET.data = d;
+    renderFio(d);
+    const cur = SET.initial == null ? null : JSON.stringify(fioCollect());
+    if (SET.initial == null || cur === SET.initial) {  // don't clobber unsaved edits
+      renderFioCfg(d.config.frameio || {}); SET.initial = JSON.stringify(fioCollect()); fioDirty();
+    }
+  }
+  function renderFioCfg(fio) {
+    const tpls = Object.keys(SET.data.templates || {});
+    if (fio.template && !tpls.includes(fio.template)) tpls.push(fio.template);
+    $("edFioOn").checked = !!fio.enabled; $("edFioClient").value = fio.client_id || "";
+    $("edFioTemplate").replaceChildren(...tpls.map((t) => h("option", { value: t }, t)));
+    $("edFioTemplate").value = fio.template || "FrameIO"; $("edFioProject").value = fio.project || "{job}";
+    fioWorkspaces(fio);
+  }
+  // the workspace list: the saved one, plus every one Frame.io lists once it's connected
+  function fioWorkspaces(fio) {
+    const sel = $("edFioWs"), list = (SET.ws || []).slice();
+    if (fio.workspace_id && !list.some((w) => w.workspace_id === fio.workspace_id))
+      list.unshift({ account_id: fio.account_id, workspace_id: fio.workspace_id, workspace: fio.workspace || fio.workspace_id, account: "" });
+    const multi = new Set(list.map((w) => w.account_id)).size > 1;
+    sel.replaceChildren(h("option", { value: "" }, list.length ? "Choose a workspace" : "Connect Frame.io to list workspaces"),
+      ...list.map((w) => h("option", { value: `${w.account_id}/${w.workspace_id}`, "data-name": w.workspace },
+        multi && w.account ? `${w.account}: ${w.workspace}` : w.workspace)));
+    sel.value = fio.workspace_id ? `${fio.account_id}/${fio.workspace_id}` : "";
+  }
+  function renderFio(d) {
+    const st = d.frameio || {};
+    $("edFioRedirect").textContent = d.frameio_redirect || "";
+    $("edFioSecretHint").textContent = st.secret ? "Saved in the Mac keychain. Paste a new one to replace it." : "Kept in the Mac keychain, not in the settings file.";
+    $("edFioSecret").placeholder = st.secret ? "Saved" : "";
+    $("edFioDisconnect").hidden = !st.connected;
+    $("edFioConnect").textContent = st.connected ? "Connect again" : "Connect Frame.io";
+    $("fioHow").open = !st.connected && !st.client_id;
+    if (!SET.busy) { const m = $("edFioMsg"); m.className = "msg-line" + (st.connected ? " ok" : ""); m.textContent = st.connected ? `Connected${st.user ? " as " + st.user : ""}` : "Not connected"; }
+    if (st.connected && !SET.ws && !SET.wsLoading) loadFioWorkspaces();
+  }
+  async function loadFioWorkspaces() {
+    SET.wsLoading = true;
+    try {
+      const r = await api("/api/frameio/workspaces");
+      if (r.ok) { SET.ws = r.workspaces; fioWorkspaces(fioCollect()); fioDirty(); }
+      else { $("edFioMsg").className = "msg-line bad"; $("edFioMsg").textContent = r.error; }
+    } catch (e) { /* shown as not connected */ }
+    SET.wsLoading = false;
+  }
+  function fioCollect() {
+    const o = $("edFioWs").selectedOptions[0], [acc, ws] = (o && o.value ? o.value : "/").split("/");
+    return { enabled: $("edFioOn").checked, client_id: $("edFioClient").value.trim() || null, account_id: acc || null,
+             workspace_id: ws || null, workspace: o && o.value ? o.dataset.name : null,
+             template: $("edFioTemplate").value || "FrameIO", project: $("edFioProject").value.trim() || null };
+  }
+  const fioDirty = () => { $("fioSave").disabled = JSON.stringify(fioCollect()) === SET.initial; };
+  async function fioSave(sub, msgEl) {
+    if (!(await saveSetup({ frameio: sub }, msgEl, "ederr", ""))) return false;
+    SET.initial = null; return true;
+  }
+  // Connect saves the Client ID and the secret first, then opens Adobe's sign-in
+  async function fioConnect() {
+    const m = $("edFioMsg"), secret = $("edFioSecret").value.trim();
+    const win = window.open("about:blank", "_blank");  // opened now, while it's still a click, so it isn't blocked
+    const fail = (t) => { if (win) win.close(); m.className = "msg-line bad"; m.textContent = t; SET.busy = false; };
+    SET.busy = true; SET.since = SET.data.frameio && SET.data.frameio.since;
+    try {
+      const cur = fioCollect();
+      if (cur.client_id !== (SET.data.config.frameio || {}).client_id) {  // the sign-in uses the saved Client ID
+        const fio = { ...SET.data.config.frameio, client_id: cur.client_id };
+        if (!(await fioSave(fio, m))) return fail("Check the Client ID.");
+        SET.data.config.frameio = fio;
+      }
+      if (secret) {
+        const r = await api("/api/frameio/secret", { secret });
+        if (!r.ok) return fail(r.error);
+        $("edFioSecret").value = "";
+      }
+      const r = await api("/api/frameio/login", {});
+      if (!r.ok) return fail(r.error);
+      if (win) win.location.href = r.url; else location.assign(r.url);
+      m.className = "msg-line"; m.textContent = "Sign in with your Adobe ID in the new tab.";
+      SET.ws = null; await loadSettings(); pollFio(Date.now());
+    } catch (e) { fail("Couldn't reach the service."); }
+  }
+  async function pollFio(started) {
+    try {
+      const d = await api("/api/project-setup");
+      if (d.frameio && d.frameio.connected && d.frameio.since !== SET.since) { SET.busy = false; SET.data = d; renderFio(d); return; }
+    } catch (e) { /* keep trying */ }
+    if (Date.now() - started < 10 * 60 * 1000) setTimeout(() => pollFio(started), 2000);
+    else SET.busy = false;
+  }
+  async function loadVc() {
+    try {
+      const d = await api("/api/vidchecker?limit=1");
+      $("vcState").textContent = !d.configured ? "The server the QC page sends checks to." : d.problem ? d.problem : `Connected to Vidchecker at ${d.url}.`;
+      renderQcSettings(d);
+    } catch (e) { $("vcState").textContent = "Couldn't reach the service."; }
+  }
+  async function showSettings() {
+    $("edFioConnect").addEventListener("click", fioConnect);
+    $("edFioDisconnect").addEventListener("click", async () => {
+      try { await api("/api/frameio/disconnect", {}); } catch (e) { /* shown below */ }
+      SET.ws = null; await loadSettings();
+    });
+    for (const ev of ["input", "change"]) $("setFioH").parentElement.addEventListener(ev, fioDirty);
+    $("fioSave").addEventListener("click", async () => {
+      if (await fioSave(fioCollect(), $("fioSaveMsg"))) await loadSettings();
+    });
     $("qcSave").addEventListener("click", async () => {
       const m = $("qcSaveMsg"); for (const e of document.querySelectorAll("[data-qcerr]")) e.textContent = "";
       const templates = [...$("qcTpls").querySelectorAll("input:checked")].map((x) => Number(x.value));
       try {
         await api("/api/settings", { vidchecker: { url: $("qcUrl").value.trim() || null, templates } });
-        m.className = "msg-line ok"; m.textContent = "Saved."; $("qcSet").dataset.ready = ""; loadQc();
+        m.className = "msg-line ok"; m.textContent = "Saved."; loadVc();
       } catch (e) {
         const errs = (e.data && e.data.errors) || {};
         for (const [k, v] of Object.entries(errs)) { const t = document.querySelector(`[data-qcerr="${CSS.escape(k)}"]`); if (t) t.textContent = v; }
         m.className = "msg-line bad"; m.textContent = "Not saved.";
       }
     });
-    loadQc();
+    try { await loadSettings(); } catch (e) { $("edFioMsg").className = "msg-line bad"; $("edFioMsg").textContent = "Couldn't reach the service."; }
+    loadVc();
   }
 
   async function showHome() {
@@ -1629,6 +1682,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   pollStatus();
   if (PAGE === "new") showProjects();
   else if (PAGE === "qc") showQc();
+  else if (PAGE === "settings") showSettings();
   else if (PAGE === "home") showHome();
   else if (location.hash === "#new") location.replace(link("/new"));  // old New project links
   else pollLibrary(true);

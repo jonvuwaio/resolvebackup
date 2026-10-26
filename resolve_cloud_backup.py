@@ -63,7 +63,7 @@ import project_setup
 import vidchecker
 
 APP = "resolve-cloud-backup"
-VERSION = "1.18.0"
+VERSION = "1.19.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -2106,7 +2106,7 @@ def _make_handler(dash: DashboardServer):
                 if not auth:
                     return
                 path, qs = auth
-                if path in ("/", "/new", "/qc", "/backups"):
+                if path in ("/", "/new", "/qc", "/settings", "/backups"):
                     csp = ("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
                            "connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'")
                     self._send(200, dash.html_path.read_bytes(), "text/html; charset=utf-8",

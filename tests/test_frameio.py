@@ -191,14 +191,10 @@ class SignInTests(unittest.TestCase):
         with self.assertRaises(frameio.FrameIOError):  # each sign-in link works once
             f.finish_login("good", q["state"])
 
-    def test_without_a_secret_it_uses_pkce(self):
+    def test_without_a_secret_it_wont_start(self):
         f = make(self.d, self.fake, secret=None)
-        q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(f.login_url("http://localhost:1/cb")).query))
-        self.assertEqual(q["code_challenge_method"], "S256")
-        f.finish_login("good", q["state"])
-        form = dict(urllib.parse.parse_qsl(self.fake.calls[0][3].decode()))
-        self.assertIn("code_verifier", form)
-        self.assertNotIn("client_secret", form)
+        with self.assertRaisesRegex(frameio.FrameIOError, "Client Secret"):
+            f.login_url("http://localhost:1/cb")
 
     def test_expired_sign_in_link(self):
         f = make(self.d, self.fake)

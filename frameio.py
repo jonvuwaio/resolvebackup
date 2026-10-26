@@ -11,8 +11,6 @@ Kept apart from the backup engine like project_setup: nothing here can stop back
 """
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import os
 import re
@@ -38,7 +36,7 @@ CACHE_TTL = 60
 _SECRET_RE = re.compile(r"^[A-Za-z0-9._~+/=:-]{1,4096}$")
 CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
-SIGNED_OUT = "Frame.io isn't connected. Connect it under Templates and locations."
+SIGNED_OUT = "Frame.io isn't connected. Connect it in Settings."
 
 
 class FrameIOError(Exception):
@@ -136,7 +134,7 @@ class FrameIO:
         self.sleep = sleep
         self._lock = threading.RLock()
         self._access: tuple[str, float] | None = None   # (token, expires at)
-        self._pending: dict[str, dict] = {}             # sign-in state -> {verifier, redirect, at}
+        self._pending: dict[str, dict] = {}             # sign-in state -> {redirect, at}
         self._cache: dict[tuple, tuple[float, list]] = {}
 
     # ---- config and status
@@ -192,18 +190,15 @@ class FrameIO:
         c = self.cfg()
         if not c["client_id"]:
             raise FrameIOError("Enter and save the Client ID first.")
+        if not self.keychain.get("client_secret"):  # an OAuth Web App credential can't sign in without it
+            raise FrameIOError("Paste the Client Secret from the Adobe Developer Console first.")
         now = self.clock()
         state = secrets.token_urlsafe(24)
         q = {"client_id": c["client_id"], "redirect_uri": redirect_uri, "scope": SCOPES, "response_type": "code",
              "state": state}
-        verifier = None
-        if not self.keychain.get("client_secret"):  # a Single Page App credential: PKCE instead of a secret
-            verifier = secrets.token_urlsafe(48)
-            q["code_challenge"] = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
-            q["code_challenge_method"] = "S256"
         with self._lock:
             self._pending = {k: v for k, v in self._pending.items() if now - v["at"] < LOGIN_TTL}
-            self._pending[state] = {"verifier": verifier, "redirect": redirect_uri, "at": now}
+            self._pending[state] = {"redirect": redirect_uri, "at": now}
         return AUTHORIZE_URL + "?" + urllib.parse.urlencode(q)
 
     def finish_login(self, code: str, state: str) -> str:
@@ -215,8 +210,6 @@ class FrameIO:
         if not code:
             raise FrameIOError("Adobe didn't send a sign-in code.")
         form = {"grant_type": "authorization_code", "code": code, "redirect_uri": p["redirect"]}
-        if p["verifier"]:
-            form["code_verifier"] = p["verifier"]
         self._token_request(form, signing_in=True)
         try:
             me = self.request("GET", "/v4/me").get("data") or {}
@@ -236,7 +229,7 @@ class FrameIO:
     def _token_request(self, form: dict, signing_in: bool = False) -> None:
         c = self.cfg()
         if not c["client_id"]:
-            raise NotConnected("Enter the Frame.io Client ID under Templates and locations.")
+            raise NotConnected("Enter the Frame.io Client ID in Settings.")
         form = {**form, "client_id": c["client_id"]}
         secret = self.keychain.get("client_secret")
         if secret:
@@ -253,7 +246,7 @@ class FrameIO:
                 raise FrameIOError(f"Adobe refused the sign-in: {why}.")
             if status in (400, 401, 403):  # the refresh token has expired or been revoked
                 self.disconnect()
-                raise NotConnected("Frame.io has signed out. Connect it again under Templates and locations.")
+                raise NotConnected("Frame.io has signed out. Connect it again in Settings.")
             raise FrameIOError(f"Adobe sign-in failed: {why}.")
         self._access = (data["access_token"], self.clock() + float(data.get("expires_in") or 3600))
         if data.get("refresh_token"):

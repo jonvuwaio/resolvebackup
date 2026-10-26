@@ -265,11 +265,12 @@ Setting up Frame.io (once; it uses the new Frame.io with an Adobe ID):
 
 1. In the [Adobe Developer Console](https://developer.adobe.com/console), signed in with the same Adobe ID you use
    for Frame.io, create a project, **Add API** > **Frame.io API** > **User Authentication** > **OAuth Web App**.
-2. Default redirect URI: `https://localhost:8765/frameio/callback`. Redirect URI pattern: the address shown under
-   **New project > Templates and locations > Frame.io** (normally `http://localhost:8765/frameio/callback`).
-3. In that Frame.io section, paste the **Client ID**, paste the **Client secret** and press **Save secret** (it goes
-   in the Mac keychain, never in the settings file), then **Connect Frame.io** and sign in in the tab that opens.
-4. Choose the **workspace**, tick **Also make a Frame.io project** and press **Save locations**.
+2. Default redirect URI: `https://localhost:8765/frameio/callback`. Redirect URI pattern: the address shown on the
+   **Settings** page under Frame.io (normally `http://localhost:8765/frameio/callback`).
+3. On **Settings**, paste the **Client ID** and the **Client Secret** and press **Connect Frame.io**: it saves both
+   (the secret goes in the Mac keychain, never in the settings file) and opens Adobe's sign-in in a new tab. It
+   won't start without the secret, which an OAuth Web App credential needs.
+4. Choose the **workspace**, tick **Make a Frame.io project for every new job** and press **Save**.
 
 The app stays signed in (the sign-in is renewed by itself). If Adobe ever ends it, the Frame.io row says so and
 **Connect Frame.io** signs in again. **Disconnect** removes the sign-in from the keychain.
@@ -299,7 +300,7 @@ Vidchecker:
 
 1. Pick the **job** (the job folders on the deliverables drive, most recently changed first). Its exports (`.mov`,
    `.mxf`, `.mp4`…) are listed with their last Vidchecker result, so you can see what's been checked.
-2. Pick the **check**: only the Vidchecker templates ticked under **Vidchecker settings** are offered (for example
+2. Pick the **check**: only the Vidchecker templates ticked on the **Settings** page are offered (for example
    the four Wash / Clearcast ones), so nobody picks the wrong one of the server's 60.
 3. Tick the files and press **Run check**. **Recent checks** shows each one waiting, checking (with progress) and
    then Passed / Warning / Failed / Rejected with its alert count. **Open Vidchecker for reports** opens the

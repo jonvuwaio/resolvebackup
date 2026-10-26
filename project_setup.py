@@ -734,11 +734,11 @@ class ProjectSetup:
         name = fill(fio["project"], values)
         row.update(project=name, path=f"{fio['workspace'] or 'Frame.io'} / {name}")
         if not self.frameio or not self.frameio.connected():
-            return {**row, "status": "not_connected", "message": "Frame.io isn't connected. Connect it under "
-                                                                 "Templates and locations."}
+            return {**row, "status": "not_connected", "message": "Frame.io isn't connected. Connect it in "
+                                                                 "Settings."}
         if not (fio["account_id"] and fio["workspace_id"]):
-            return {**row, "status": "not_set_up", "message": "Choose the Frame.io workspace under Templates and "
-                                                              "locations."}
+            return {**row, "status": "not_set_up", "message": "Choose the Frame.io workspace in "
+                                                              "Settings."}
         if tpl is None:
             return {**row, "status": "template_missing",
                     "message": problem or f"There's no template called {fio['template']}."}

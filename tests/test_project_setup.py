@@ -402,7 +402,7 @@ class ApiTests(unittest.TestCase):
                                                           "Content-Type": "application/json"})
                     with urllib.request.urlopen(req) as r:
                         return json.loads(r.read())
-                for page in ("/", "/new", "/backups"):  # home, new project and backups are one file
+                for page in ("/", "/new", "/qc", "/settings", "/backups"):  # every page is the one file
                     req = urllib.request.Request(f"http://127.0.0.1:{dash.port}{page}?t={dash.token}")
                     with urllib.request.urlopen(req) as r:
                         self.assertIn(b"Colour Project Manager", r.read())
