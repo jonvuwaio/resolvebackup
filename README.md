@@ -224,9 +224,10 @@ all of these, named after the job: its working folders on the workstation's RAID
 (`Deliverables/Projects/<Job>`, from the `Deliverables` template; exports only, never working projects) and its
 DaVinci Resolve project with the bins, and its Frame.io project with the review folders.
 
-1. Pick the **project drive**: the RAID of the workstation the job is on. **Add a drive…** at the bottom of the
-   list offers every connected drive that isn't set up yet, already filled in as `Projects/<Client>/<Job>` with
-   the `Project` template (change either for a drive that's laid out differently).
+1. Pick the **project drive**: the RAID of the workstation the job is on. Drives are added on the **Settings**
+   page (**New project > Add a drive**), which offers every connected drive that isn't set up yet, already filled
+   in as `Projects/<Client>/<Job>` with the `Project` template (change either for a drive that's laid out
+   differently).
 2. Pick the **job name** from the list, which comes from column G of the Job Report's CURRENT tab (newest number
    first; jobs already set up are at the bottom, to finish a missing part). The **client folder** is then picked
    for you: the folder that client's jobs went in most recently. To pick another, type part of its name in the
@@ -237,7 +238,7 @@ DaVinci Resolve project with the bins, and its Frame.io project with the review 
 
    The job list is read from a link to just the job names, published from Google Sheets, so the Job Report itself
    (budgets, contacts) stays private: make a sheet with `=IMPORTRANGE("<Job Report ID>", "CURRENT!G:G")` in A1,
-   publish it to the web as CSV, and paste the link under **Templates and locations > Job list**. The list is read
+   publish it to the web as CSV, and paste the link on the **Settings** page under **New project > Job list**. The list is read
    again every two minutes, or when you press **Refresh**.
 3. Check the list of what the job gets and press **Create project**. It's all or nothing: Create stays off until
    every part can be made (a drive that isn't connected blocks it), and if one part fails, what that attempt made
@@ -286,10 +287,9 @@ part way, the folders made by that attempt are removed again (only empty folders
 number already in use is flagged. Every job made is recorded in `created_projects.json` in the app's folder, and in
 the log.
 
-Drives, the locations every job also gets, and the templates folder can also be edited under **Templates and locations** in the
-same panel. In paths, `{job}` is the job name; `{client_folder}`, `{client}`, `{job_no}`, `{title}`, `{yyyy}`,
-`{mm}` and `{dd}` also work. The Resolve library, template project, folder and project name are set there too.
-Creating the Frame.io project comes next.
+The New project page only asks for the job: everything set up once (drives, the locations every job also gets,
+the templates folder, the job list, the Resolve project and Frame.io) is on the **Settings** page. In paths, `{job}` is the job name; `{client_folder}`, `{client}`, `{job_no}`, `{title}`, `{yyyy}`,
+`{mm}` and `{dd}` also work.
 
 A hidden (`-nogui`) Resolve stops answering scripts as soon as it opens a project (checked on Resolve 21.1), so
 the hidden Resolve never opens one: projects that can only be backed up by opening them are retried once Resolve

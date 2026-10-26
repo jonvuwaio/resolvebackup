@@ -505,6 +505,62 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
 </div>
 <div id="setPage">
   <h1>Settings</h1>
+  <section aria-labelledby="setNpH" id="npEdit">
+    <h2 id="setNpH">New project</h2>
+    <p class="banner" id="npProblem2" hidden></p>
+    <p class="hint" style="margin:0 0 10px">Where new jobs go, what they get, and where the job names come from. Changes here apply to every new job.</p>
+      <div class="f"><label for="edTemplates">Folder templates</label>
+        <div class="row"><input type="text" id="edTemplates" spellcheck="false"><button type="button" class="btn" id="edChooseTemplates" hidden>Choose…</button></div>
+        <div class="hint">Each folder in here is a template. Change a template there and new jobs follow it.</div>
+        <div class="err" data-ederr="project_setup.templates_dir"></div></div>
+      <div class="f"><label for="edJobList">Job list</label>
+        <input type="text" id="edJobList" spellcheck="false" placeholder="https://docs.google.com/spreadsheets/d/e/…/pub?…&amp;output=csv">
+        <div class="hint" id="edJobListState"></div>
+        <details><summary class="hint" style="cursor:pointer">How to publish just the job names</summary>
+          <ol class="steps">
+            <li>Make a new Google Sheet, for example "Job names for Colour Project Manager".</li>
+            <li>In A1 put <code class="sel">=IMPORTRANGE("1pw-T6EYLZ2ls8oIuQKCWbss7usjrWrUoqgqZiZDY0wA", "CURRENT!G:G")</code> and press Allow access.</li>
+            <li>File &gt; Share &gt; Publish to web: choose that sheet and Comma-separated values (.csv), press Publish and paste the link here.</li>
+          </ol>
+          <div class="hint">Only the job names are published, never the budgets or contacts in the Job Report. New jobs show up within two minutes, or press Refresh.</div>
+            <div class="err" data-ederr="project_setup.job_list_url"></div></div>
+      <div class="f"><span class="lab">Project drives</span>
+        <div class="hint">The RAIDs a job can go on. Each one appears in the Project drive list on New project.</div>
+        <div id="edDrives"></div>
+        <button type="button" class="btn" id="edAddDrive" style="margin-top:8px">Add a drive</button>
+        <div class="box" id="addDrive" hidden>
+        <div class="f"><label for="adVol">Drive</label><select id="adVol"></select>
+          <div class="hint" id="adVolHint"></div></div>
+        <div class="f"><label for="adLayout">Jobs go in</label>
+          <select id="adLayout">
+            <option value="{client_folder}/{job}">Projects / Client / Job</option>
+            <option value="{job}">Projects / Job</option>
+          </select></div>
+        <div class="f"><label for="adTemplate">Folder template</label><select id="adTemplate"></select></div>
+        <div class="f"><label for="adPath">Full path</label><input type="text" id="adPath" spellcheck="false">
+          <div class="err" data-aderr="path"></div><div class="err" data-aderr="name"></div><div class="err" data-aderr="template"></div></div>
+        <div class="row" style="margin-top:12px;display:flex;gap:8px"><button type="button" class="btn primary" id="adSave">Add drive</button><button type="button" class="btn" id="adCancel">Cancel</button><span class="msg-line" id="adMsg"></span></div>
+      </div></div>
+      <div class="f"><span class="lab">Every job also gets</span>
+        <div class="hint">Folders made for every job as well as on its project drive, for example the deliverables structure.</div>
+        <div id="edExtras"></div>
+        <button type="button" class="btn" id="edAddExtra" style="margin-top:8px">Add a location</button></div>
+      <div class="f"><label class="check"><input type="checkbox" id="edRvOn"> Also make a DaVinci Resolve project</label>
+        <div class="hint">A copy of the template project, made without opening anything. If Resolve is closed it's started hidden for a few seconds.</div>
+        <div class="err" data-ederr="project_setup.resolve.enabled"></div>
+        <div class="ed-row" style="border:0;padding-top:6px">
+          <div class="row"><span style="flex:none;width:9em">Library</span><select id="edRvLib" aria-label="Library"></select></div>
+          <div class="err" data-ederr="project_setup.resolve.library"></div>
+          <div class="row"><span style="flex:none;width:9em">Template project</span><input type="text" id="edRvTemplate" list="edRvTemplates" spellcheck="false" placeholder="Folder/Project" aria-label="Template project"><datalist id="edRvTemplates"></datalist></div>
+          <div class="err" data-ederr="project_setup.resolve.template"></div>
+          <div class="row"><span style="flex:none;width:9em">Put it in</span><input type="text" id="edRvFolder" spellcheck="false" aria-label="Resolve folder"></div>
+          <div class="err" data-ederr="project_setup.resolve.folder"></div>
+          <div class="row"><span style="flex:none;width:9em">Name it</span><input type="text" id="edRvProject" spellcheck="false" aria-label="Project name"></div>
+          <div class="err" data-ederr="project_setup.resolve.project"></div>
+        </div></div>
+      <div class="hint" style="margin-top:14px">In paths, {job} is the job name. You can also use {client_folder}, {client}, {job_no}, {title}, {yyyy}, {mm} and {dd}.</div>
+      <div class="row" style="margin-top:14px;display:flex;gap:12px;align-items:center"><button type="button" class="btn primary" id="edSave" disabled>Save</button><span class="msg-line" id="edMsg"></span></div>
+  </section>
   <section aria-labelledby="setFioH">
     <h2 id="setFioH">Frame.io</h2>
     <p class="hint" style="margin:0 0 10px">Makes a Frame.io project for each new job, with the folders of a template.</p>
@@ -524,7 +580,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     <div class="f" style="margin-top:22px"><label for="edFioWs">Workspace</label><select id="edFioWs"></select>
       <div class="err" data-ederr="project_setup.frameio.workspace_id"></div></div>
     <div class="f"><label for="edFioTemplate">Folder template</label><select id="edFioTemplate"></select>
-      <div class="hint">From the folder templates on the New project page.</div>
+      <div class="hint">One of the folder templates set under New project above.</div>
       <div class="err" data-ederr="project_setup.frameio.template"></div></div>
     <div class="f"><label for="edFioProject">Name it</label><input type="text" id="edFioProject" spellcheck="false">
       <div class="hint">{job} is the job name.</div>
@@ -550,21 +606,9 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     <p class="banner" id="npProblem" hidden></p>
     <div class="f"><label for="npDrive">Project drive</label>
       <select id="npDrive"></select>
-      <div class="hint">The RAID of the workstation the job is on.</div>
+      <div class="hint" id="npDriveHint">The RAID of the workstation the job is on.</div>
       <div class="err" data-nperr="drive"></div>
-      <div class="box" id="addDrive" hidden>
-        <div class="f"><label for="adVol">Drive</label><select id="adVol"></select>
-          <div class="hint" id="adVolHint"></div></div>
-        <div class="f"><label for="adLayout">Jobs go in</label>
-          <select id="adLayout">
-            <option value="{client_folder}/{job}">Projects / Client / Job</option>
-            <option value="{job}">Projects / Job</option>
-          </select></div>
-        <div class="f"><label for="adTemplate">Folder template</label><select id="adTemplate"></select></div>
-        <div class="f"><label for="adPath">Full path</label><input type="text" id="adPath" spellcheck="false">
-          <div class="err" data-aderr="path"></div><div class="err" data-aderr="name"></div><div class="err" data-aderr="template"></div></div>
-        <div class="row" style="margin-top:12px;display:flex;gap:8px"><button type="button" class="btn primary" id="adSave">Add drive</button><button type="button" class="btn" id="adCancel">Cancel</button><span class="msg-line" id="adMsg"></span></div>
-      </div></div>
+</div>
     <div class="f"><label for="npJobSel">Job name</label>
       <div class="row"><select id="npJobSel"></select><button type="button" class="btn" id="npJobRefresh" title="Read the job list again">Refresh</button></div>
       <input type="text" id="npJobName" spellcheck="false" placeholder="For example WC105_WSM_Varley_Spring26" aria-label="Job name" hidden style="margin-top:8px">
@@ -579,47 +623,9 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
       <div class="err" data-nperr="client_folder"></div></div>
     <ul class="warns" id="npWarn"></ul>
     <div class="f"><span class="lab">This job gets</span><ul class="where" id="npWhere"></ul></div>
+    <p class="soon" id="npNoDrive" hidden>No project drives are set up yet. Add one in <a id="npNoDriveLink" href="/settings">Settings</a>.</p>
     <p class="soon" id="npSoon" hidden>Frame.io isn't set up yet, so it isn't part of the job. Set it up in <a id="npSoonLink" href="/settings">Settings</a>.</p>
     <ul class="results" id="npResults" hidden></ul>
-    <details style="margin-top:28px" id="npEdit">
-      <summary>Templates and locations</summary>
-      <div class="f"><label for="edTemplates">Folder templates</label>
-        <div class="row"><input type="text" id="edTemplates" spellcheck="false"><button type="button" class="btn" id="edChooseTemplates" hidden>Choose…</button></div>
-        <div class="hint">Each folder in here is a template. Change a template there and new jobs follow it.</div>
-        <div class="err" data-ederr="project_setup.templates_dir"></div></div>
-      <div class="f"><label for="edJobList">Job list</label>
-        <input type="text" id="edJobList" spellcheck="false" placeholder="https://docs.google.com/spreadsheets/d/e/…/pub?…&amp;output=csv">
-        <div class="hint" id="edJobListState"></div>
-        <details><summary class="hint" style="cursor:pointer">How to publish just the job names</summary>
-          <ol class="steps">
-            <li>Make a new Google Sheet, for example "Job names for Colour Project Manager".</li>
-            <li>In A1 put <code class="sel">=IMPORTRANGE("1pw-T6EYLZ2ls8oIuQKCWbss7usjrWrUoqgqZiZDY0wA", "CURRENT!G:G")</code> and press Allow access.</li>
-            <li>File &gt; Share &gt; Publish to web: choose that sheet and Comma-separated values (.csv), press Publish and paste the link here.</li>
-          </ol>
-          <div class="hint">Only the job names are published, never the budgets or contacts in the Job Report. New jobs show up within two minutes, or press Refresh.</div>
-        </details>
-        <div class="err" data-ederr="project_setup.job_list_url"></div></div>
-      <div class="f"><span class="lab">Project drives</span><div id="edDrives"></div></div>
-      <div class="f"><span class="lab">Every job also gets</span>
-        <div class="hint">Folders made for every job as well as on its project drive, for example the deliverables structure.</div>
-        <div id="edExtras"></div>
-        <button type="button" class="btn" id="edAddExtra" style="margin-top:8px">Add a location</button></div>
-      <div class="f"><label class="check"><input type="checkbox" id="edRvOn"> Also make a DaVinci Resolve project</label>
-        <div class="hint">A copy of the template project, made without opening anything. If Resolve is closed it's started hidden for a few seconds.</div>
-        <div class="err" data-ederr="project_setup.resolve.enabled"></div>
-        <div class="ed-row" style="border:0;padding-top:6px">
-          <div class="row"><span style="flex:none;width:9em">Library</span><select id="edRvLib" aria-label="Library"></select></div>
-          <div class="err" data-ederr="project_setup.resolve.library"></div>
-          <div class="row"><span style="flex:none;width:9em">Template project</span><input type="text" id="edRvTemplate" list="edRvTemplates" spellcheck="false" placeholder="Folder/Project" aria-label="Template project"><datalist id="edRvTemplates"></datalist></div>
-          <div class="err" data-ederr="project_setup.resolve.template"></div>
-          <div class="row"><span style="flex:none;width:9em">Put it in</span><input type="text" id="edRvFolder" spellcheck="false" aria-label="Resolve folder"></div>
-          <div class="err" data-ederr="project_setup.resolve.folder"></div>
-          <div class="row"><span style="flex:none;width:9em">Name it</span><input type="text" id="edRvProject" spellcheck="false" aria-label="Project name"></div>
-          <div class="err" data-ederr="project_setup.resolve.project"></div>
-        </div></div>
-      <div class="hint" style="margin-top:14px">In paths, {job} is the job name. You can also use {client_folder}, {client}, {job_no}, {title}, {yyyy}, {mm} and {dd}.</div>
-      <div class="row" style="margin-top:14px;display:flex;gap:12px;align-items:center"><button type="button" class="btn primary" id="edSave" disabled>Save locations</button><span class="msg-line" id="edMsg"></span></div>
-    </details>
   </form>
   <footer><span id="npMsg" class="msg-line" role="status"></span><button class="btn primary" id="npCreate" disabled>Create project</button></footer>
 </main>
@@ -635,7 +641,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   document.body.classList.add("pg-" + PAGE);
   const link = (path) => path + "?t=" + encodeURIComponent(TOKEN);
   for (const [id, path] of [["navHome", "/"], ["navNew", "/new"], ["navQc", "/qc"], ["navBackups", "/backups"], ["navSettings", "/settings"],
-                            ["npSoonLink", "/settings"],
+                            ["npSoonLink", "/settings"], ["npNoDriveLink", "/settings"],
                             ["bkPill", "/backups"], ["hBackups", "/backups"], ["hNew", "/new"], ["hQcLink", "/qc"]]) {
     const a = document.getElementById(id); a.href = link(path);
     if (id.startsWith("nav") && PAGES[path] === PAGE) a.setAttribute("aria-current", "page");
@@ -1044,7 +1050,6 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   });
 
   // ---------- new project ----------
-  const ADD = "__add__";
   const NP = { data: null, drive: null, jobId: null, clientTouched: false, touched: new Set(), showAll: false,
                timer: null, seq: 0, plan: null, busy: false, done: false, editInitial: null, opener: null };
   const STATUS_WORD = { ready: "Ready", waiting: "Waiting for the job details", exists: "Already exists",
@@ -1070,7 +1075,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     else if (!jl.names.length && !jl.configured) sel.value = TYPED;
     $("npJobRefresh").hidden = !jl.configured;
     syncJobTyped(d);
-    const hint = jl.problem ? jl.problem : !jl.configured ? "Set the job list under Templates and locations to pick names instead of typing them." : "";
+    const hint = jl.problem ? jl.problem : !jl.configured ? "No job list is set up yet, so names have to be typed. It's added in Settings." : "";
     $("npJobHint").textContent = sel.value === TYPED ? [(d.next_job_no ? `Next free number is ${d.next_job_no}.` : ""), hint].join(" ").trim() : hint;
     $("npJobHint").classList.toggle("bad-text", !!jl.problem);
   }
@@ -1180,18 +1185,14 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     const d = await api("/api/project-setup"); NP.data = d;
     const c = d.config, sel = $("npDrive");
     const keep = NP.drive != null && c.drives[NP.drive] ? c.drives[NP.drive].name : d.last_drive;
-    sel.replaceChildren(...c.drives.map((x, i) => h("option", { value: String(i) }, x.name)), h("option", { value: ADD }, "Add a drive…"));
+    sel.replaceChildren(...(c.drives.length ? c.drives.map((x, i) => h("option", { value: String(i) }, x.name)) : [h("option", { value: "" }, "None set up yet")]));
     let idx = c.drives.findIndex((x) => x.name === keep);
     if (idx < 0) idx = c.drives.length ? 0 : null;
-    NP.drive = idx; sel.value = idx == null ? ADD : String(idx);
-    if (idx == null) openAddDrive(); else $("addDrive").hidden = true;
+    NP.drive = idx; sel.value = idx == null ? "" : String(idx);
+    $("npNoDrive").hidden = idx != null;
     renderClientChoices(d); renderJobChoices(d);
     $("npProblem").hidden = !d.templates_problem; $("npProblem").textContent = d.templates_problem || "";
-    $("edChooseTemplates").hidden = !d.can_choose_folder;
     $("npSoon").hidden = !!(c.frameio && c.frameio.enabled);
-    if (NP.editInitial == null || JSON.stringify(collectEditor()) === NP.editInitial) {  // don't clobber unsaved edits
-      renderEditor(c); NP.editInitial = JSON.stringify(collectEditor()); $("edSave").disabled = true;
-    }
   }
 
   function schedulePreview() { clearTimeout(NP.timer); NP.timer = setTimeout(preview, 250); }
@@ -1268,7 +1269,6 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     b.disabled = false;
   });
   $("npDrive").addEventListener("change", (ev) => {
-    if (ev.target.value === ADD) { openAddDrive(); return; }
     NP.drive = Number(ev.target.value); $("addDrive").hidden = true; clearDone(); schedulePreview();
   });
 
@@ -1295,17 +1295,15 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   }
   $("adVol").addEventListener("change", adSync);
   $("adLayout").addEventListener("change", adSync);
-  $("adCancel").addEventListener("click", () => {
-    $("addDrive").hidden = true;
-    if (NP.drive != null) $("npDrive").value = String(NP.drive);
-  });
+  $("edAddDrive").addEventListener("click", () => { openAddDrive(); $("edAddDrive").hidden = true; $("adVol").focus(); });
+  $("adCancel").addEventListener("click", () => { $("addDrive").hidden = true; $("edAddDrive").hidden = false; });
   $("adSave").addEventListener("click", async () => {
     const o = $("adVol").selectedOptions[0], path = $("adPath").value.trim();
     const name = o && o.value ? o.dataset.name : (path.split("/").filter(Boolean)[1] || "");
     const drives = NP.data.config.drives.concat([{ name, template: $("adTemplate").value, path }]);
     if (await saveSetup({ drives }, $("adMsg"), "aderr", `project_setup.drives.${drives.length - 1}.`)) {
-      NP.drive = drives.length - 1; NP.editInitial = null;
-      await loadSetup(); clearDone(); schedulePreview();
+      $("addDrive").hidden = true; $("edAddDrive").hidden = false; NP.editInitial = null;
+      await loadSettings();
     }
   });
 
@@ -1348,7 +1346,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     $("edJobListState").textContent = !c.job_list_url ? "Where the job names in the Job name list come from."
       : jl.problem ? jl.problem : `${plural((jl.names || []).length, "job name")} read from it.`;
     $("edDrives").replaceChildren(...c.drives.map((x, i) => edRow("drives", x, i)));
-    if (!c.drives.length) $("edDrives").append(h("div", { class: "hint" }, "None yet. Use Add a drive… in the Project drive list."));
+    if (!c.drives.length) $("edDrives").append(h("div", { class: "hint" }, "None yet. Use Add a drive below."));
     $("edExtras").replaceChildren(...c.extras.map((x, i) => edRow("extras", x, i)));
     const rv = c.resolve || {}, libs = ((NP.data && NP.data.libraries) || []).slice();
     if (rv.library && !libs.includes(rv.library)) libs.push(rv.library);
@@ -1401,8 +1399,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     const cur = collectEditor();
     if (await saveSetup(cur, $("edMsg"), "ederr", "")) {
       NP.editInitial = null;
-      if (NP.drive != null && NP.drive >= cur.drives.length) NP.drive = null;
-      await loadSetup(); clearDone(); schedulePreview();
+      await loadSettings();
     }
   });
 
@@ -1587,7 +1584,12 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   // ---------- settings ----------
   const SET = { data: null, initial: null, ws: null, wsLoading: false, busy: false, since: null };
   async function loadSettings() {
-    const d = await api("/api/project-setup"); SET.data = d;
+    const d = await api("/api/project-setup"); SET.data = d; NP.data = d;
+    $("edChooseTemplates").hidden = !d.can_choose_folder;
+    $("npProblem2").hidden = !d.templates_problem; $("npProblem2").textContent = d.templates_problem || "";
+    if (NP.editInitial == null || JSON.stringify(collectEditor()) === NP.editInitial) {  // don't clobber unsaved edits
+      renderEditor(d.config); NP.editInitial = JSON.stringify(collectEditor()); $("edSave").disabled = true;
+    }
     renderFio(d);
     const cur = SET.initial == null ? null : JSON.stringify(fioCollect());
     if (SET.initial == null || cur === SET.initial) {  // don't clobber unsaved edits
