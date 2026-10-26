@@ -229,8 +229,10 @@ DaVinci Resolve project with the bins, and its Frame.io project with the review 
    the `Project` template (change either for a drive that's laid out differently).
 2. Pick the **job name** from the list, which comes from column G of the Job Report's CURRENT tab (newest number
    first; jobs already set up are at the bottom, to finish a missing part). The **client folder** is then picked
-   for you: the folder that client's jobs went in most recently. Both are drop-downs, to keep typing (and typos)
-   out of it; **Type a name that isn't on the list…** and **New client folder…** are there for the exceptions. A
+   for you: the folder that client's jobs went in most recently. To pick another, type part of its name in the
+   client folder box: the list narrows as you type (arrow keys and Enter, or click). Only existing folders can be
+   picked, to keep typos out of it; **Type a name that isn't on the list…** and **New client folder…** are there
+   for the exceptions. A
    typed job name starts with the next free number. Every path is previewed live.
 
    The job list is read from a link to just the job names, published from Google Sheets, so the Job Report itself

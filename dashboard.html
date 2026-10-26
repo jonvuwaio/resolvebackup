@@ -184,6 +184,17 @@ body.pg-new #newDrawer header h2 { font-size: 24px; font-weight: 500; }
 body.pg-new #newDrawer form { overflow: visible; }
 body.pg-new #newDrawer footer { position: sticky; bottom: 0; background: var(--bg); }
 body.pg-backups #newDrawer { display: none; }
+.combo { position: relative; }
+.combo input { padding-right: 28px !important; }
+.combo::after { content: ""; position: absolute; right: 12px; top: 15px; border: 4px solid transparent; border-top-color: var(--dim); pointer-events: none; }
+.combo ul { position: absolute; z-index: 30; left: 0; right: 0; top: 100%; margin: 2px 0 0; padding: 4px 0; list-style: none;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px; max-height: 300px; overflow: auto; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+.combo li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 10px; cursor: pointer; }
+.combo li small { color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.combo li b { font-weight: 600; color: var(--text); }
+.combo li[aria-selected="true"] { background: var(--raised); }
+.combo li.new { border-top: 1px solid var(--line-soft); color: var(--dim); }
+.combo li.none { color: var(--faint); cursor: default; }
 .drive-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
 .drive { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; min-width: 0; }
 .drive .dn { font-weight: 500; overflow-wrap: anywhere; }
@@ -559,8 +570,10 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
       <input type="text" id="npJobName" spellcheck="false" placeholder="For example WC105_WSM_Varley_Spring26" aria-label="Job name" hidden style="margin-top:8px">
       <div class="hint" id="npJobHint"></div>
       <div class="err" data-nperr="job"></div></div>
-    <div class="f"><label for="npClientSel">Client folder</label>
-      <select id="npClientSel"></select>
+    <div class="f"><label for="npClientFind">Client folder</label>
+      <select id="npClientSel" hidden tabindex="-1" aria-hidden="true"></select>
+      <div class="combo"><input type="text" id="npClientFind" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="npClientList" spellcheck="false" autocomplete="off" placeholder="Type to search, or choose from the list">
+        <ul id="npClientList" role="listbox" aria-label="Client folders" hidden></ul></div>
       <input type="text" id="npClientFolder" spellcheck="false" aria-label="New client folder" placeholder="Name of the new client folder" hidden style="margin-top:8px">
       <div class="hint" id="npClientHint"></div>
       <div class="err" data-nperr="client_folder"></div></div>
@@ -1075,15 +1088,83 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   }
   function syncClient() {
     const v = $("npClientSel").value, c = NP.data && NP.data.clients.find((x) => x.folder === v);
+    if (document.activeElement !== $("npClientFind")) $("npClientFind").value = v === NEWC ? "New client folder" : v;
     $("npClientFolder").hidden = v !== NEWC;
     $("npClientHint").textContent = v === NEWC ? "Made with the job. Check the spelling: it's the folder every later job for this client goes in."
       : c && c.last_job ? `Last job: ${c.last_job}` : "";
   }
+  // the client folder search: type part of a name, pick with the arrow keys and Enter or the mouse
+  const CF = { items: [], at: -1 };
+  const squash = (t) => (t || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  function clientMatches(q) {
+    const all = (NP.data && NP.data.clients) || [], sq = squash(q);
+    if (!sq) return all;
+    const hit = all.filter((x) => squash(x.folder).includes(sq) || squash(x.client).includes(sq));
+    const starts = (x) => squash(x.folder).startsWith(sq) || squash(x.client).startsWith(sq);
+    return hit.filter(starts).concat(hit.filter((x) => !starts(x)));
+  }
+  function boldMatch(text, q) {
+    const i = q ? text.toLowerCase().indexOf(q.toLowerCase()) : -1;
+    return i < 0 ? [text] : [text.slice(0, i), h("b", {}, text.slice(i, i + q.length)), text.slice(i + q.length)];
+  }
+  function openClientList() {
+    const inp = $("npClientFind"), q = inp.value.trim(), list = $("npClientList");
+    const showAll = !q || q === $("npClientSel").value || q === "New client folder";
+    const found = clientMatches(showAll ? "" : q);
+    CF.items = found.map((x) => x.folder).concat([NEWC]);
+    list.replaceChildren(...found.map((x, i) => h("li", { role: "option", id: "cf" + i, "data-i": String(i) },
+        h("span", {}, ...boldMatch(x.folder, showAll ? "" : q)), x.last_job ? h("small", {}, x.last_job) : null)),
+      ...(found.length ? [] : [h("li", { class: "none" }, "No client folder matches")]),
+      h("li", { role: "option", class: "new", id: "cf" + found.length, "data-i": String(found.length) },
+        showAll ? "New client folder…" : `New client folder "${q}"…`));
+    CF.at = showAll ? CF.items.indexOf($("npClientSel").value) : 0;  // no match: the new folder option
+    list.hidden = false; inp.setAttribute("aria-expanded", "true"); markClient();
+  }
+  function closeClientList() { $("npClientList").hidden = true; $("npClientFind").setAttribute("aria-expanded", "false"); CF.at = -1; }
+  function markClient() {
+    const lis = $("npClientList").querySelectorAll("li[role=option]");
+    lis.forEach((li, i) => li.setAttribute("aria-selected", String(i === CF.at)));
+    if (CF.at >= 0 && lis[CF.at]) { lis[CF.at].scrollIntoView({ block: "nearest" }); $("npClientFind").setAttribute("aria-activedescendant", lis[CF.at].id); }
+    else $("npClientFind").removeAttribute("aria-activedescendant");
+  }
+  function chooseClient(v) {
+    const typed = $("npClientFind").value.trim(), sel = $("npClientSel");
+    if (v === NEWC && typed && typed !== "New client folder" && !(NP.data.clients || []).some((x) => x.folder === typed)) $("npClientFolder").value = typed;
+    sel.value = v; closeClientList();
+    $("npClientFind").blur();
+    sel.dispatchEvent(new Event("input", { bubbles: true }));
+    NP.touched.add("client_folder");
+  }
+  $("npClientFind").addEventListener("focus", (ev) => { ev.target.select(); openClientList(); });
+  $("npClientFind").addEventListener("input", openClientList);
+  $("npClientFind").addEventListener("keydown", (ev) => {
+    const open = !$("npClientList").hidden;
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      ev.preventDefault();
+      if (!open) { openClientList(); return; }
+      const n = CF.items.length; CF.at = ev.key === "ArrowDown" ? (CF.at + 1) % n : (CF.at - 1 + n) % n; markClient();
+    } else if (ev.key === "Enter") {
+      ev.preventDefault();
+      if (open && CF.at >= 0) chooseClient(CF.items[CF.at]);
+    } else if (ev.key === "Escape" && open) { ev.preventDefault(); closeClientList(); syncClientText(); }
+  });
+  $("npClientList").addEventListener("mousedown", (ev) => {
+    ev.preventDefault();  // keep the focus in the box so it doesn't close first
+    const li = ev.target.closest("li[data-i]"); if (li) chooseClient(CF.items[Number(li.dataset.i)]);
+  });
+  $("npClientFind").addEventListener("blur", () => {
+    if ($("npClientList").hidden) return;
+    const q = $("npClientFind").value.trim().toLowerCase(), exact = ((NP.data && NP.data.clients) || []).find((x) => x.folder.toLowerCase() === q);
+    closeClientList();
+    if (exact && exact.folder !== $("npClientSel").value) chooseClient(exact.folder); else syncClientText();
+  });
+  const syncClientText = () => { const v = $("npClientSel").value; $("npClientFind").value = v === NEWC ? "New client folder" : v; };
+
   // the client folder that goes with a job name: the folder whose jobs use the same client name
   function pickClientFor(job) {
     const part = (job.match(/^[A-Z]{1,3}\d{3,5}_([A-Za-z0-9-]+)/) || [])[1];
     if (!part || !NP.data) return;
-    const low = part.toLowerCase(), squash = (t) => t.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const low = part.toLowerCase();
     // of the folders this client's jobs have gone in, the one used most recently
     const newest = (list) => list.sort((a, b) => (b.last_job || "").localeCompare(a.last_job || ""))[0];
     const cs = NP.data.clients;
@@ -1331,7 +1412,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     if (NP.done) {  // start another
       for (const id of ["npJobName", "npClientFolder", "npJobSel", "npClientSel"]) $(id).value = "";
       NP.touched.clear(); NP.showAll = false; NP.jobId = null; clearDone();
-      await loadSetup(); preview(); $("npClientFolder").focus(); return;
+      await loadSetup(); preview(); $("npJobSel").focus(); return;
     }
     NP.showAll = true; renderPlan();
     if (!NP.plan || !NP.plan.can_create) return;
@@ -1655,7 +1736,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   async function showProjects() {
     try { await loadSetup(); } catch (e) { $("npMsg").className = "msg-line bad"; $("npMsg").textContent = "Couldn't reach the service. Reload the page to try again."; return; }
     preview(); renderRecent();
-    (NP.drive == null ? $("adVol") : $("npClientFolder")).focus();
+    (NP.drive == null ? $("adVol") : $("npJobSel")).focus();
   }
   // jobs made recently, newest first
   const RV_WORD = { queued: "Resolve project waiting", running: "Resolve project being made", done: "Resolve project made",
