@@ -63,7 +63,7 @@ import project_setup
 import vidchecker
 
 APP = "resolve-cloud-backup"
-VERSION = "1.24.0"
+VERSION = "1.25.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -2130,7 +2130,7 @@ def _make_handler(dash: DashboardServer):
                 if not auth:
                     return
                 path, qs = auth
-                if path in ("/", "/new", "/qc", "/settings", "/backups"):
+                if path in ("/", "/new", "/qc", "/frameio", "/settings", "/backups"):
                     csp = ("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
                            "connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'")
                     self._send(200, dash.html_path.read_bytes(), "text/html; charset=utf-8",
@@ -2166,6 +2166,14 @@ def _make_handler(dash: DashboardServer):
                         self._send(200, {"ok": True, "workspaces": dash.svc.frameio.workspaces()})
                     except frameio.FrameIOError as e:
                         self._send(200, {"ok": False, "error": str(e)})
+                elif path == "/api/frameio/recent":
+                    try:
+                        fresh = (qs.get("fresh") or ["0"])[0] == "1"
+                        if not dash.svc.frameio.connected():
+                            raise frameio.NotConnected("Frame.io isn't connected. Connect it in Settings.")
+                        self._send(200, {"ok": True, **dash.svc.frameio.recent_now(fresh=fresh)})
+                    except frameio.FrameIOError as e:
+                        self._send(200, {"ok": False, "error": str(e), "connected": dash.svc.frameio.connected()})
                 elif path == "/favicon.ico":
                     self._send(204, b"", "image/x-icon")
                 else:

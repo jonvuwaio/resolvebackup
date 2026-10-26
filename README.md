@@ -305,6 +305,13 @@ A hidden (`-nogui`) Resolve stops answering scripts as soon as it opens a projec
 the hidden Resolve never opens one: projects that can only be backed up by opening them are retried once Resolve
 is open normally.
 
+## Frame.io page
+
+The **Frame.io** page lists the projects created or changed in the last two weeks (newest first, new ones marked),
+and the videos added or changed in them, with their folder, each linking straight to Frame.io. It shows the last
+list at once and checks Frame.io again in the background every two minutes while it's open (the very first read
+takes about 20 seconds). Only folders that have changed are opened, so it stays quick with hundreds of projects.
+
 ## QC with Vidchecker
 
 The **QC** page runs checks on a Telestream Vidchecker server (8.x) and shows their results, without opening

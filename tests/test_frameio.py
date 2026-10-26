@@ -293,6 +293,74 @@ class ApiCallTests(unittest.TestCase):
         self.assertIn("delete it in Frame.io", str(e.exception))
 
 
+class RecentFake(FakeFrameIO):
+    """Projects and folders with dates, for the Frame.io page."""
+
+    PROJECTS = [  # name, created, updated, root
+        ("WC086_New", "2026-10-23T09:00:00Z", "2026-10-26T17:53:00Z", "r1"),
+        ("WB982_Old_But_Busy", "2026-09-18T09:00:00Z", "2026-10-26T17:42:00Z", "r2"),
+        ("WA100_Quiet", "2025-01-01T09:00:00Z", "2025-02-01T09:00:00Z", "r3")]
+    CHILDREN = {
+        "r1": [{"type": "folder", "id": "g1", "name": "Grade", "updated_at": "2026-10-26T17:53:00Z"},
+               {"type": "folder", "id": "o1", "name": "Online", "updated_at": "2026-01-01T00:00:00Z"}],
+        "g1": [{"type": "file", "id": "v1", "name": "Spot_v01.mov", "media_type": "video/quicktime",
+                "created_at": "2026-10-26T17:50:00Z", "updated_at": "2026-10-26T17:53:00Z", "view_url": "https://f/v1"},
+               {"type": "file", "id": "w1", "name": "mix.wav", "media_type": "audio/x-wav",
+                "updated_at": "2026-10-26T17:52:00Z"}],
+        "o1": [{"type": "file", "id": "never", "name": "should_not_be_opened.mov"}],
+        "r2": [{"type": "version_stack", "id": "s1", "name": "BF_30s_v10.mp4", "updated_at": "2026-10-26T17:40:00Z",
+                "view_url": "https://f/s1"}],
+        "r3": [{"type": "file", "id": "x", "name": "old.mov", "media_type": "video/quicktime",
+                "updated_at": "2025-02-01T09:00:00Z"}]}
+
+    def __call__(self, method, url, headers, body):
+        p = urllib.parse.urlparse(url).path
+        if url.startswith(frameio.TOKEN_URL):
+            return super().__call__(method, url, headers, body)
+        self.calls.append((method, p, headers, body))
+        if p == f"/v4/accounts/{ACC}/workspaces/{WS}/projects":
+            return 200, {}, {"data": [{"id": n, "name": n, "created_at": c, "updated_at": u, "root_folder_id": r,
+                                       "view_url": f"https://f/{n}"} for n, c, u, r in self.PROJECTS], "links": {}}
+        if p.endswith("/children"):
+            return 200, {}, {"data": self.CHILDREN.get(p.split("/")[5], []), "links": {}}
+        return 404, {}, {}
+
+
+class RecentTests(unittest.TestCase):
+    def test_recent_projects_and_videos(self):
+        with tempfile.TemporaryDirectory() as d:
+            fake = RecentFake()
+            f = make(Path(d), fake)
+            f.keychain.set("refresh_token", "rt-1")
+            f.clock.t = 1793050000  # 2026-10-26
+            r = f.recent()
+            self.assertEqual([(p["name"], p["new"]) for p in r["projects"]],
+                             [("WC086_New", True), ("WB982_Old_But_Busy", False)])  # the quiet one isn't listed
+            self.assertEqual([(v["name"], v["project"], v["folder"], v["versions"]) for v in r["videos"]],
+                             [("Spot_v01.mov", "WC086_New", "Grade", False),
+                              ("BF_30s_v10.mp4", "WB982_Old_But_Busy", "", True)])  # no audio
+            opened = [c[1] for c in fake.calls if c[1].endswith("/children")]
+            self.assertNotIn(f"/v4/accounts/{ACC}/folders/o1/children", opened)  # unchanged folders aren't opened
+            self.assertNotIn(f"/v4/accounts/{ACC}/folders/r3/children", opened)
+            n = len(fake.calls)
+            f.recent()
+            self.assertEqual(len(fake.calls), n)  # kept for a while
+
+    def test_shown_straight_away_and_refreshed_in_the_background(self):
+        import time as _t
+        with tempfile.TemporaryDirectory() as d:
+            f = make(Path(d), RecentFake())
+            f.keychain.set("refresh_token", "rt-1")
+            f.clock.t = 1793050000
+            self.assertTrue(f.recent_now()["loading"])
+            for _ in range(100):
+                r = f.recent_now()
+                if not r.get("loading") and not r["refreshing"]:
+                    break
+                _t.sleep(0.02)
+            self.assertEqual(len(r["videos"]), 2)
+
+
 class FrameIOConfigTests(unittest.TestCase):
     def test_valid_and_problems(self):
         clean, errs = ps.validate_config({"frameio": {"enabled": True, "client_id": "abcdef123456", "account_id": ACC,

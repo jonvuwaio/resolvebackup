@@ -18,6 +18,7 @@ import secrets
 import ssl
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 import urllib.error
 import urllib.parse
@@ -31,6 +32,7 @@ API = "https://api.frame.io"
 SCOPES = "openid,email,profile,offline_access,additional_info.roles"
 KEYCHAIN_SERVICE = "Colour Project Manager Frame.io"
 USER_AGENT = "ColourProjectManager"
+RECENT_TTL = 120          # seconds the recent projects and videos are kept
 LOGIN_TTL = 15 * 60          # seconds a sign-in link stays valid
 FOLDER_GAP = 0.35            # Frame.io allows 3 new folders a second
 CACHE_TTL = 60
@@ -38,6 +40,16 @@ _SECRET_RE = re.compile(r"^[A-Za-z0-9._~+/=:-]{1,4096}$")
 CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 SIGNED_OUT = "Frame.io isn't connected. Connect it in Settings."
+
+
+_VIDEO_EXT = (".mov", ".mp4", ".mxf", ".m4v", ".avi", ".mkv", ".webm", ".r3d", ".braw", ".mts")
+
+
+def _is_video(x: dict) -> bool:
+    """A video file, or a version stack of them (which has no media type of its own)."""
+    if (x.get("media_type") or "").startswith("video/"):
+        return True
+    return x.get("type") in ("file", "version_stack") and (x.get("name") or "").lower().endswith(_VIDEO_EXT)
 
 
 class FrameIOError(Exception):
@@ -138,6 +150,9 @@ class FrameIO:
         self._access: tuple[str, float] | None = None   # (token, expires at)
         self._pending: dict[str, dict] = {}             # sign-in state -> {redirect, at}
         self._cache: dict[tuple, tuple[float, list]] = {}
+        self._recent_last: tuple[float, dict] | None = None
+        self._recent_busy = False
+        self._recent_error: str | None = None
 
     # ---- config and status
     def cfg(self) -> dict:
@@ -330,6 +345,82 @@ class FrameIO:
         val = self._all(f"/v4/accounts/{account_id}/workspaces/{workspace_id}/projects")
         self._cache[key] = (time.monotonic(), val)
         return val
+
+    def recent(self, days: int = 14, projects: int = 30, walk: int = 15, videos: int = 60, fresh: bool = False) -> dict:
+        """Projects created or updated in the last `days`, newest first, and the videos added or changed in the most
+        recent `walk` of them. Only folders changed since then are opened, so it stays quick. Cached for two minutes."""
+        c = self.cfg()
+        acc, ws = c["account_id"], c["workspace_id"]
+        if not (acc and ws):
+            raise NotConnected("Choose the Frame.io workspace in Settings.")
+        key = ("recent", acc, ws, days)
+        with self._lock:
+            hit = self._cache.get(key)
+            if hit and not fresh and time.monotonic() - hit[0] < RECENT_TTL:
+                return hit[1]
+        cutoff = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(self.clock() - days * 86400))
+        when = lambda x: x.get("updated_at") or x.get("created_at") or ""  # noqa: E731
+        recent = sorted((p for p in self.projects(acc, ws, fresh) if when(p) >= cutoff), key=when, reverse=True)
+        found: list[dict] = []
+        # one level of folders at a time, several look-ups at once: one after another takes close to a minute
+        level = [(p["root_folder_id"], p, []) for p in recent[:walk] if p.get("root_folder_id")]
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for depth in range(7):
+                if not level:
+                    break
+                kids = pool.map(lambda f: self._all(f"/v4/accounts/{acc}/folders/{f[0]}/children"), level)
+                nxt = []
+                for (_fid, project, path), items in zip(level, kids):
+                    for x in items:
+                        if when(x) < cutoff:
+                            continue  # nothing in it has changed since
+                        if x.get("type") == "folder":
+                            nxt.append((x["id"], project, path + [x.get("name") or ""]))
+                        elif _is_video(x):
+                            found.append({"name": x.get("name"), "url": x.get("view_url"), "project": project.get("name"),
+                                          "project_url": project.get("view_url"), "folder": "/".join(path),
+                                          "created_at": x.get("created_at"), "updated_at": when(x),
+                                          "versions": x.get("type") == "version_stack", "size": x.get("file_size")})
+                level = nxt
+        out = {"days": days, "at": int(self.clock()),
+               "projects": [{"name": p.get("name"), "url": p.get("view_url"), "created_at": p.get("created_at"),
+                             "updated_at": when(p), "new": (p.get("created_at") or "") >= cutoff} for p in recent[:projects]],
+               "videos": sorted(found, key=lambda v: v["updated_at"], reverse=True)[:videos]}
+        with self._lock:
+            self._cache[key] = (time.monotonic(), out)
+        return out
+
+    def recent_now(self, fresh: bool = False) -> dict:
+        """What the page shows straight away: the last list (if any), refreshed in the background when it's over two
+        minutes old or `fresh` is asked for. {"loading": True} until the first one is in; {"error": …} if it failed."""
+        with self._lock:
+            last = self._recent_last
+            stale = fresh or not last or time.monotonic() - last[0] > RECENT_TTL
+            start = stale and not self._recent_busy
+            if start:
+                self._recent_busy = True
+        if start:
+            def run():
+                try:
+                    val = self.recent(fresh=True)
+                    with self._lock:
+                        self._recent_last, self._recent_error = (time.monotonic(), val), None
+                except FrameIOError as e:
+                    with self._lock:
+                        self._recent_error = str(e)
+                except Exception as e:  # noqa: BLE001
+                    with self._lock:
+                        self._recent_error = f"Couldn't read Frame.io: {e}."
+                finally:
+                    with self._lock:
+                        self._recent_busy = False
+            threading.Thread(target=run, daemon=True, name="frameio-recent").start()
+        with self._lock:
+            out = dict(last[1]) if self._recent_last else {"projects": [], "videos": [], "loading": True}
+            out["refreshing"] = self._recent_busy
+            if self._recent_error:
+                out["error"] = self._recent_error
+            return out
 
     def find_project(self, name: str, fresh: bool = False) -> dict | None:
         c = self.cfg()
