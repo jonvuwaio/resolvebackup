@@ -307,8 +307,10 @@ is open normally.
 
 ## Frame.io page
 
-The **Frame.io** page lists the projects created or changed in the last two weeks (newest first, new ones marked),
-and the videos added or changed in them, with their folder, each linking straight to Frame.io. It shows the last
+The **Frame.io** page lists the videos added or changed in the last two weeks (project first, then the video and its
+folder), then the projects created or changed in that time (new ones marked), each linking straight to Frame.io.
+The newest 12 videos and 8 projects show, with **Show all** for the rest. **Home** shows the latest nine projects
+under **Recent on Frame.io**. It shows the last
 list at once and checks Frame.io again in the background every two minutes while it's open (the very first read
 takes about 20 seconds). Only folders that have changed are opened, so it stays quick with hundreds of projects.
 

@@ -168,13 +168,22 @@ body.pg-qc #backupPage, body.pg-qc #drawer, body.pg-qc #newDrawer { display: non
 #qcPage h1 { font-size: 24px; font-weight: 500; margin: 0 0 4px; }
 #qcPage h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; }
 #qcPage section { margin-top: 26px; }
-#fioPage { max-width: 1100px; margin: 0 auto; padding: 28px 24px 56px; }
-#fioPage h1 { font-size: 24px; font-weight: 500; margin: 0 0 4px; }
-#fioPage h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; }
-#fioPage section { margin-top: 26px; }
-#fioPage td a { color: var(--text); text-decoration: none; } #fioPage td a:hover { text-decoration: underline; }
-#fioPage td.fn { overflow-wrap: anywhere; } #fioPage td small { display: block; color: var(--faint); }
-#fioPage .tag { font-size: 11px; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; margin-left: 6px; white-space: nowrap; }
+#fioPage { max-width: 1100px; margin: 0 auto; padding: 18px 24px 40px; }
+.fio-head { display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; }
+.fio-head h1 { font-size: 20px; font-weight: 500; margin: 0; }
+.fio-state { color: var(--faint); font-size: 12.5px; flex: 1 1 auto; }
+.fio-acts { display: flex; gap: 8px; }
+#fioPage h2 { font-size: 13px; font-weight: 600; margin: 0 0 4px; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+#fioPage section { margin-top: 18px; }
+.fio-tbl { table-layout: fixed; font-size: 13px; }
+.fio-tbl th { padding: 4px 8px; font-size: 12px; }
+.fio-tbl td { padding: 4px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+.fio-tbl td a { color: var(--text); text-decoration: none; } .fio-tbl td a:hover { text-decoration: underline; }
+.fio-tbl td .dim { color: var(--faint); margin-left: 8px; }
+.fio-tbl td.d { color: var(--dim); font-variant-numeric: tabular-nums; }
+.fio-tbl tbody tr:hover { background: var(--raised); }
+#fioPage .tag { font-size: 10.5px; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; margin-left: 6px; }
+.link-btn { margin-top: 6px; padding: 3px 10px; font-size: 12.5px; }
 .qc-run { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 16px; }
 @media (max-width: 760px) { .qc-run { grid-template-columns: 1fr; } }
 .qc-files { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); margin-top: 10px; }
@@ -207,6 +216,11 @@ body.pg-backups #newDrawer { display: none; }
 .combo li[aria-selected="true"] { background: var(--raised); }
 .combo li.new { border-top: 1px solid var(--line-soft); color: var(--dim); }
 .combo li.none { color: var(--faint); cursor: default; }
+.hfio-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 0 24px; }
+.hfio-list li { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--line-soft); min-width: 0; font-size: 13px; }
+.hfio-list a { color: var(--text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hfio-list a:hover { text-decoration: underline; }
+.hfio-list span { color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .drive-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
 .drive { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; min-width: 0; }
 .drive .dn { font-weight: 500; overflow-wrap: anywhere; }
@@ -491,6 +505,10 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
       <div class="acts"><a class="btn primary" id="hNew" href="/new">New project</a></div>
     </div>
   </div>
+<section id="hFio" aria-labelledby="hFioH" hidden>
+  <div class="lib-head"><h2 id="hFioH" style="margin:0">Recent on Frame.io</h2><a class="btn" id="hFioLink" href="/frameio">All recent videos and projects</a></div>
+  <ul class="hfio-list" id="hFioList"></ul>
+</section>
 <section id="drivesPanel" aria-labelledby="drivesH" hidden>
   <h2 id="drivesH">Drives</h2>
   <div class="drive-grid" id="drivesGrid"></div>
@@ -519,17 +537,20 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   </section>
 </div>
 <div id="fioPage">
-  <h1>Frame.io</h1>
-  <p class="hint" style="color:var(--dim);margin:0" id="fioState">Reading Frame.io</p>
-  <div class="qc-bar"><a class="btn" id="fioOpen" target="_blank" rel="noopener">Open Frame.io</a>
-    <button class="btn" id="fioRefresh">Refresh</button></div>
-  <section aria-labelledby="fioProjH">
-    <h2 id="fioProjH">Recent projects</h2>
-    <div class="scroll"><table><thead><tr><th>Project</th><th>Created</th><th>Last change</th></tr></thead><tbody id="fioProjRows"></tbody></table></div>
-  </section>
+  <div class="fio-head"><h1>Frame.io</h1>
+    <span class="fio-state" id="fioState">Reading Frame.io</span>
+    <span class="fio-acts"><button class="btn" id="fioRefresh">Refresh</button><a class="btn" id="fioOpen" target="_blank" rel="noopener">Open Frame.io</a></span></div>
   <section aria-labelledby="fioVidH">
     <h2 id="fioVidH">Recent videos</h2>
-    <div class="scroll"><table><thead><tr><th>Video</th><th>Project</th><th>Added or changed</th></tr></thead><tbody id="fioVidRows"></tbody></table></div>
+    <table class="fio-tbl"><colgroup><col style="width:32%"><col><col style="width:7.5em"></colgroup>
+      <thead><tr><th>Project</th><th>Video</th><th>Added</th></tr></thead><tbody id="fioVidRows"></tbody></table>
+    <button class="btn link-btn" id="fioVidMore" hidden></button>
+  </section>
+  <section aria-labelledby="fioProjH">
+    <h2 id="fioProjH">Recent projects</h2>
+    <table class="fio-tbl"><colgroup><col><col style="width:7.5em"><col style="width:7.5em"></colgroup>
+      <thead><tr><th>Project</th><th>Created</th><th>Last change</th></tr></thead><tbody id="fioProjRows"></tbody></table>
+    <button class="btn link-btn" id="fioProjMore" hidden></button>
   </section>
 </div>
 <div id="setPage">
@@ -675,7 +696,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   const link = (path) => path + "?t=" + encodeURIComponent(TOKEN);
   for (const [id, path] of [["navHome", "/"], ["navNew", "/new"], ["navQc", "/qc"], ["navBackups", "/backups"], ["navFio", "/frameio"], ["navSettings", "/settings"],
                             ["npSoonLink", "/settings"], ["npNoDriveLink", "/settings"],
-                            ["bkPill", "/backups"], ["hBackups", "/backups"], ["hNew", "/new"], ["hQcLink", "/qc"]]) {
+                            ["bkPill", "/backups"], ["hBackups", "/backups"], ["hNew", "/new"], ["hQcLink", "/qc"], ["hFioLink", "/frameio"]]) {
     const a = document.getElementById(id); a.href = link(path);
     if (id.startsWith("nav") && PAGES[path] === PAGE) a.setAttribute("aria-current", "page");
   }
@@ -1787,7 +1808,36 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   }
 
   // ---------- Frame.io: recent projects and videos ----------
-  const FIO = { timer: null };
+  const FIO = { timer: null, data: null, allVid: false, allProj: false };
+  const VID_ROWS = 12, PROJ_ROWS = 8;
+  // short dates: "Today 17:53", "Yesterday 16:24", "23 Oct"
+  function shortWhen(s) {
+    const d = date(s); if (!d) return "";
+    const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diff = Math.round((day(new Date()) - day(d)) / 86400000);
+    const hm = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    return diff === 0 ? `Today ${hm}` : diff === 1 ? `Yesterday ${hm}` : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  }
+  const fioLink = (url, text) => url ? h("a", { href: url, target: "_blank", rel: "noopener", title: text }, text) : text;
+  function renderFio() {
+    const d = FIO.data; if (!d) return;
+    const vids = FIO.allVid ? d.videos : d.videos.slice(0, VID_ROWS);
+    $("fioVidRows").replaceChildren(...vids.map((v) => h("tr", {},
+      h("td", {}, fioLink(v.project_url, v.project)),
+      h("td", { title: v.folder ? `${v.folder} / ${v.name}` : v.name }, fioLink(v.url, v.name),
+        v.versions ? h("span", { class: "tag" }, "Versions") : null, v.folder ? h("span", { class: "dim" }, v.folder) : null),
+      h("td", { class: "d", title: when(v.updated_at) }, shortWhen(v.updated_at)))));
+    if (!d.videos.length) $("fioVidRows").append(h("tr", {}, h("td", { colspan: "3", class: "none" }, "No videos added in the last two weeks.")));
+    const more = (btn, all, n, shown, word) => { btn.hidden = n <= shown; btn.textContent = all ? "Show fewer" : `Show all ${n} ${word}`; };
+    more($("fioVidMore"), FIO.allVid, d.videos.length, VID_ROWS, "videos");
+    const projs = FIO.allProj ? d.projects : d.projects.slice(0, PROJ_ROWS);
+    $("fioProjRows").replaceChildren(...projs.map((p) => h("tr", {},
+      h("td", {}, fioLink(p.url, p.name), p.new ? h("span", { class: "tag" }, "New") : null),
+      h("td", { class: "d", title: when(p.created_at) }, shortWhen(p.created_at)),
+      h("td", { class: "d", title: when(p.updated_at) }, shortWhen(p.updated_at)))));
+    if (!d.projects.length) $("fioProjRows").append(h("tr", {}, h("td", { colspan: "3", class: "none" }, "Nothing in the last two weeks.")));
+    more($("fioProjMore"), FIO.allProj, d.projects.length, PROJ_ROWS, "projects");
+  }
   async function loadFio(fresh) {
     clearTimeout(FIO.timer);
     let d;
@@ -1795,30 +1845,21 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     const st = $("fioState");
     if (!d.ok) {
       st.replaceChildren(d.error || "Frame.io isn't connected.", " ", h("a", { href: link("/settings") }, "Open Settings"));
-      $("fioProjRows").replaceChildren(); $("fioVidRows").replaceChildren(); return;
+      FIO.data = null; $("fioProjRows").replaceChildren(); $("fioVidRows").replaceChildren(); return;
     }
     if (d.loading) {
       st.textContent = d.error ? d.error : "Reading Frame.io. The first time takes about 20 seconds.";
       if (!d.error) FIO.timer = setTimeout(() => loadFio(false), 2000);
       return;
     }
-    st.textContent = (d.error ? `Couldn't refresh: ${d.error} ` : "") + `Projects created or changed in the last ${d.days} days, and the videos added or changed in them.`
-      + (d.refreshing ? " Checking for newer ones…" : "");
-    const a = (url, text) => url ? h("a", { href: url, target: "_blank", rel: "noopener" }, text) : text;
-    $("fioProjRows").replaceChildren(...d.projects.map((p) => h("tr", {},
-      h("td", { class: "fn" }, a(p.url, p.name), p.new ? h("span", { class: "tag" }, "New") : null),
-      h("td", {}, when(p.created_at)), h("td", {}, when(p.updated_at)))));
-    if (!d.projects.length) $("fioProjRows").append(h("tr", {}, h("td", { colspan: "3", class: "none" }, "Nothing in the last two weeks.")));
-    $("fioVidRows").replaceChildren(...d.videos.map((v) => h("tr", {},
-      h("td", { class: "fn" }, a(v.url, v.name), v.versions ? h("span", { class: "tag" }, "Versions") : null,
-        v.folder ? h("small", {}, v.folder) : null),
-      h("td", { class: "fn" }, a(v.project_url, v.project)),
-      h("td", {}, when(v.updated_at)))));
-    if (!d.videos.length) $("fioVidRows").append(h("tr", {}, h("td", { colspan: "3", class: "none" }, "No videos added in the last two weeks.")));
+    st.textContent = d.error ? `Couldn't refresh: ${d.error}` : d.refreshing ? "Checking for newer ones…" : `Last ${d.days} days`;
+    FIO.data = d; renderFio();
     FIO.timer = setTimeout(() => loadFio(false), d.refreshing ? 3000 : 120000);
   }
   function showFrameio() {
     $("fioOpen").href = "https://next.frame.io/";
+    $("fioVidMore").addEventListener("click", () => { FIO.allVid = !FIO.allVid; renderFio(); });
+    $("fioProjMore").addEventListener("click", () => { FIO.allProj = !FIO.allProj; renderFio(); });
     $("fioRefresh").addEventListener("click", () => { $("fioState").textContent = "Checking Frame.io…"; loadFio(true); });
     loadFio(false);
   }
@@ -1844,6 +1885,19 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
       } catch (e) { /* stays */ }
     };
     qc(); setInterval(qc, 30000);
+    // Frame.io: the latest projects, straight from the same list as the Frame.io page
+    const fio = async () => {
+      let d;
+      try { d = await api("/api/frameio/recent"); } catch (e) { return; }
+      if (!d.ok) { $("hFio").hidden = true; return; }
+      $("hFio").hidden = false;
+      if (d.loading) { $("hFioList").replaceChildren(h("li", {}, h("span", {}, "Reading Frame.io…"))); setTimeout(fio, 3000); return; }
+      $("hFioList").replaceChildren(...d.projects.slice(0, 9).map((p) => h("li", {},
+        h("a", { href: p.url, target: "_blank", rel: "noopener", title: p.name }, p.name), h("span", {}, shortWhen(p.updated_at)))));
+      if (!d.projects.length) $("hFioList").append(h("li", {}, h("span", {}, "Nothing in the last two weeks.")));
+      if (d.refreshing) setTimeout(fio, 3000);
+    };
+    fio(); setInterval(fio, 120000);
   }
 
   async function showProjects() {
