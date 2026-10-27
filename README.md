@@ -27,7 +27,8 @@ Files are written to a temporary name and renamed only when complete, so a crash
 
 ## See it working live
 
-- **Dashboard:** the service runs a small web page on your own machine only (`127.0.0.1`, never the network).
+- **Dashboard:** the service runs a small web page on your own machine only (`127.0.0.1`), unless you list
+  `lan_hostnames` in `config.json` to open it to other machines (see Configuration).
   It has four pages: **Home** (the start page: backup status with Back up now / Stop / Pause, every drive's free
   space, and the jobs made recently), **New project**, **QC** (Vidchecker checks) and **Backups**. Drives under 15% free show amber, under 5% red; drives set up here but not connected
   are listed too, and shares on the same storage say so.
@@ -131,7 +132,7 @@ Windows `%APPDATA%\resolve-cloud-backup`, Linux `~/.config/resolve-cloud-backup`
 
 ## Configuration (`config.json` in that folder, or the dashboard's Settings drawer)
 
-Changes apply from the next cycle without restarting. Only the dashboard port needs a restart.
+Changes apply from the next cycle without restarting. Only the dashboard port and `lan_hostnames` need a restart.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -156,6 +157,7 @@ Changes apply from the next cycle without restarting. Only the dashboard port ne
 | `min_free_gb` | `5` | Skip the cycle if the backup disk is nearly full. |
 | `with_stills_and_luts` | `true` | Passed to `ExportProject`. |
 | `dashboard` | `{enabled: true, port: 8765}` | The local live dashboard. If the port is taken the next free one (up to +19) is used. `alert_command` isn't editable from the browser, on purpose. |
+| `dashboard.lan_hostnames` | `[]` | Names other machines may use for the dashboard, e.g. `["colour.local"]`. When set, the dashboard also listens on the network and accepts those names; every request still needs the access token, and Frame.io sign-in still has to be done on this machine. On a Mac each `.local` name is advertised by Bonjour, so other machines find it with no DNS setup: open `http://colour.local:8765/?t=<token>` (the token is in the menu bar icon's dashboard link). Traffic is plain HTTP, so use it only on a network you trust. |
 
 ## Projects open elsewhere
 

@@ -287,6 +287,22 @@ class DashboardTests(LiveBase):
         self.assertEqual(self.req("GET", "/api/status", self.AUTH, host=f"evil.example:{self.dash.port}")[0], 403)
         self.assertEqual(self.req("GET", "/api/status", self.AUTH, host=f"localhost:{self.dash.port}")[0], 200)
 
+    def test_lan_hostnames_are_opt_in(self):
+        self.assertEqual(self.dash.httpd.server_address[0], "127.0.0.1")
+        self.assertEqual(self.req("GET", "/api/status", self.AUTH, host=f"colour.test:{self.dash.port}")[0], 403)
+        self.dash = rcb.DashboardServer(self.svc, port=0, html_path=self.html, token=TOKEN, state_dir=self.tmp,
+                                        lan_hostnames=["Colour.Test."])
+        self.dash.start()
+        self.addCleanup(self.dash.stop)
+        self.assertEqual(self.dash.httpd.server_address[0], "0.0.0.0")
+        lan = f"colour.test:{self.dash.port}"
+        self.assertEqual(self.req("GET", "/api/status", self.AUTH, host=lan)[0], 200)
+        self.assertEqual(self.req("GET", "/api/status", host=lan)[0], 401)                   # still needs the token
+        self.assertEqual(self.req("GET", "/api/status", self.AUTH, host=f"evil.example:{self.dash.port}")[0], 403)
+        self.assertEqual(self.req("POST", "/api/run-now", {**self.AUTH, "Origin": f"http://{lan}"}, body={},
+                                  host=lan)[0], 200)
+        self.assertEqual(self.req("GET", "/frameio/callback?code=x&state=y", host=lan)[0], 403)  # sign-in: local only
+
     def test_post_needs_header_token_and_same_origin(self):
         self.assertEqual(self.req("POST", f"/api/run-now?t={TOKEN}", body={})[0], 401)   # query token not enough
         self.assertEqual(self.req("POST", "/api/run-now", {**self.AUTH, "Origin": "https://evil.example"},
