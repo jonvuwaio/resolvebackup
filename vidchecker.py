@@ -30,6 +30,9 @@ NS = "http://www.vidcheck.com/services"
 API_VERSION = 11
 MEDIA = {".mov", ".mxf", ".mp4", ".m4v", ".mts", ".ts", ".mpg", ".mpeg", ".wav", ".mkv", ".avi"}
 CACHE_TTL = 300
+# The server's drive list is slow (Windows waits on every mapped drive, dead ones too) and rarely changes.
+ROOTS_TTL = 3600
+SLOW_TIMEOUT = 120
 _URL_RE = re.compile(r"^https?://[A-Za-z0-9.\-]+(:\d{1,5})?/?$")
 _MOUNT_RE = re.compile(r"^//(?:[^@/]*@)?([^/]+)/(.+?) on (/Volumes/.+?) \((\w+)")
 
@@ -86,6 +89,7 @@ class Vidchecker:
         self.clock = clock
         self._lock = threading.Lock()
         self._cache: dict[str, tuple[float, object]] = {}
+        self._roots_busy = False
 
     # ---- config
     def cfg(self) -> dict:
@@ -120,11 +124,16 @@ class Vidchecker:
     def _private(self, action: str, inner: str, contract: str = "IPrivateService", timeout: float = 30) -> ET.Element:
         return self._call(f"{API_VERSION}/PrivateService.svc", contract, action, inner, timeout)
 
-    def _cached(self, key: str, fn, fresh: bool = False):
+    def _cached(self, key: str, fn, fresh: bool = False, ttl: float = CACHE_TTL, stale_ok: bool = False):
         hit = self._cache.get(key)
-        if hit and not fresh and self.clock() - hit[0] < CACHE_TTL:
+        if hit and not fresh and self.clock() - hit[0] < ttl:
             return hit[1]
-        val = fn()
+        try:
+            val = fn()
+        except VidcheckerError:
+            if stale_ok and hit:
+                return hit[1]
+            raise
         self._cache[key] = (self.clock(), val)
         return val
 
@@ -140,7 +149,7 @@ class Vidchecker:
     def roots(self, fresh: bool = False) -> list[dict]:
         """The server's drives: [{"drive": "W:\\\\", "host": "10.0.0.152", "share": "WashDeliverables"}]."""
         def get():
-            r = self._call("FileService.svc", "IFileService", "GetRoots", "<vc:GetRoots/>")
+            r = self._call("FileService.svc", "IFileService", "GetRoots", "<vc:GetRoots/>", timeout=SLOW_TIMEOUT)
             out = []
             for f in r.iter("File"):
                 info = (_text(f, "Info") or "").strip()
@@ -148,7 +157,23 @@ class Vidchecker:
                 out.append({"drive": _text(f, "Filename") or "", "host": m.group(1).lower() if m else None,
                             "share": m.group(2) if m else None})
             return out
-        return self._cached("roots", get, fresh)
+        return self._cached("roots", get, fresh, ttl=ROOTS_TTL, stale_ok=True)
+
+    def warm_roots(self) -> None:
+        """Fetch the drive list in the background, so the QC page never waits for it."""
+        hit = self._cache.get("roots")
+        if self._roots_busy or not self.cfg()["url"] or (hit and self.clock() - hit[0] < ROOTS_TTL):
+            return
+        self._roots_busy = True
+
+        def run():
+            try:
+                self.roots()
+            except VidcheckerError:
+                pass
+            finally:
+                self._roots_busy = False
+        threading.Thread(target=run, daemon=True).start()
 
     def server_path(self, mac_path: str | Path) -> str:
         """The path the Vidchecker server opens this file by. Raises VidcheckerError when it can't see the drive."""
@@ -171,7 +196,8 @@ class Vidchecker:
         parent = str(PureWindowsPath(server_path).parent)
         try:
             r = self._call("FileService.svc", "IFileService", "ListFiles",
-                           f"<vc:ListFiles><vc:Dir><vc:Filename>{escape(parent)}</vc:Filename></vc:Dir></vc:ListFiles>")
+                           f"<vc:ListFiles><vc:Dir><vc:Filename>{escape(parent)}</vc:Filename></vc:Dir></vc:ListFiles>",
+                           timeout=SLOW_TIMEOUT)
         except VidcheckerError:
             return False
         names = {(_text(f, "Filename") or "").lower() for f in r.iter("File")}
@@ -220,11 +246,13 @@ class Vidchecker:
         return out
 
     def _mac_paths(self):
-        try:
-            table = self._cached("mounts", self.mount_table)
-            roots = self.roots()
-        except VidcheckerError:
+        hit = self._cache.get("roots")
+        if not hit:  # not fetched yet: show the list now, the Mac paths appear once the drives are known
+            self.warm_roots()
             return lambda s: None
+        self.warm_roots()
+        table = self._cached("mounts", self.mount_table)
+        roots = hit[1]
         by_drive = {}
         for mount, (host, share) in table.items():
             for r in roots:

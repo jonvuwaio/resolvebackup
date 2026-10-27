@@ -63,7 +63,7 @@ import project_setup
 import vidchecker
 
 APP = "resolve-cloud-backup"
-VERSION = "1.26.0"
+VERSION = "1.26.1"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -1575,6 +1575,7 @@ class Service:
         # reads config.json itself, so a drive added from the dashboard works at once, even mid-backup
         self.frameio = frameio.FrameIO(lambda: load_config(self.cfg_path), self.dir)
         self.vidchecker = vidchecker.Vidchecker(lambda: load_config(self.cfg_path))
+        self.vidchecker.warm_roots()  # the server takes up to a minute to list its drives
         self.setup = project_setup.ProjectSetup(
             lambda: load_config(self.cfg_path), self.dir,
             known_names=lambda: self.backup.load_state()["projects"].keys(),

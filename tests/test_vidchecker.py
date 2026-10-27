@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import unittest
 import urllib.request
 from pathlib import Path
@@ -139,13 +140,30 @@ class CheckTests(unittest.TestCase):
 
     def test_tasks_and_status(self):
         v, _ = make()
-        ts = v.tasks()
+        ts = v.tasks()  # the drive list is slow: the first list doesn't wait for it
         self.assertEqual([t["id"] for t in ts], [6, 5])
+        self.assertIsNone(ts[1]["file"])
+        for _ in range(200):
+            if "roots" in v._cache and not v._roots_busy:
+                break
+            time.sleep(0.01)
+        ts = v.tasks()
         self.assertEqual((ts[0]["status"], ts[0]["percent"], ts[1]["result"]), ("Processing", 40, "Passed"))
         self.assertEqual(ts[1]["file"], "/Volumes/WashDeliverables/Deliverables/Projects/WC105_A_B/Online/old.mov")
         st = v.status()
         self.assertTrue(st["ok"])
         self.assertEqual([a["id"] for a in st["assigned"]], [117, 116])
+
+    def test_slow_drive_list(self):
+        server = FakeServer()
+        v, _ = make(server=server)
+        seen = []
+        http = v.http
+        v.http = lambda url, h, body, timeout: (seen.append((h["SOAPAction"], timeout)), http(url, h, body, timeout))[1]
+        roots = v.roots()
+        self.assertTrue(any("GetRoots" in a and t >= 60 for a, t in seen))
+        server.down = True  # an old drive list is better than none
+        self.assertEqual(v.roots(fresh=True), roots)
 
     def test_server_down(self):
         server = FakeServer()
