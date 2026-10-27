@@ -63,7 +63,7 @@ import project_setup
 import vidchecker
 
 APP = "resolve-cloud-backup"
-VERSION = "1.27.0"
+VERSION = "1.28.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -118,9 +118,11 @@ DEFAULTS = {
     "alert_after_failures": 3,
     # Live dashboard served by the service on this machine only (127.0.0.1).
     # lan_hostnames: names other machines may use, e.g. ["colour.local"]. When set, the dashboard also listens on
-    # the network, accepts those names (still needs the token) and, on a Mac, advertises each .local name by Bonjour.
-    # Changing the port or lan_hostnames needs a service restart; everything else reloads by itself.
-    "dashboard": {"enabled": True, "port": 8765, "lan_hostnames": []},
+    # the network, accepts those names and, on a Mac, advertises each .local name by Bonjour. It is served on
+    # lan_web_port as well (80 = plain http://colour.local, null = off) if that port is free.
+    # lan_token: false lets anyone on the network in through those names without the access token.
+    # Changing any dashboard setting needs a service restart; everything else reloads by itself.
+    "dashboard": {"enabled": True, "port": 8765, "lan_hostnames": [], "lan_web_port": 80, "lan_token": True},
     # Save the currently open project before exporting (off: don't touch open work).
     "save_open_project": False,
     # Safety valves.
@@ -1992,9 +1994,14 @@ class DashboardServer:
     Every request needs the token and a Host header naming this dashboard (DNS-rebinding defence)."""
 
     def __init__(self, service: Service, port: int = 8765, html_path: Path | None = None,
-                 token: str | None = None, state_dir: Path | None = None, lan_hostnames=()):
+                 token: str | None = None, state_dir: Path | None = None, lan_hostnames=(),
+                 lan_web_port: int | None = None, lan_token: bool = True):
         self.svc = service
         self.lan_hostnames = [str(n).strip().lower().rstrip(".") for n in lan_hostnames if str(n).strip()]
+        self.lan_web_port = lan_web_port
+        self.lan_token = lan_token
+        self.web_port = None  # lan_web_port once it is actually listening
+        self.httpd_web = None
         self.bonjour = None
         self.base_port = port
         self.dir = Path(state_dir) if state_dir else service.dir
@@ -2021,8 +2028,18 @@ class DashboardServer:
         self.httpd.daemon_threads = True
         self.port = self.httpd.server_address[1]
         threading.Thread(target=self.httpd.serve_forever, name="dashboard", daemon=True).start()
+        if self.lan_hostnames and self.lan_web_port is not None:
+            try:
+                self.httpd_web = http.server.ThreadingHTTPServer(("0.0.0.0", self.lan_web_port), handler)
+            except OSError as e:
+                log.warning("Dashboard could not also use port %s (%s); use port %d instead",
+                            self.lan_web_port, e, self.port)
+            else:
+                self.httpd_web.daemon_threads = True
+                self.web_port = self.httpd_web.server_address[1]
+                threading.Thread(target=self.httpd_web.serve_forever, name="dashboard-web", daemon=True).start()
         if self.lan_hostnames:
-            self.bonjour = BonjourAlias(self.lan_hostnames, self.port)
+            self.bonjour = BonjourAlias(self.lan_hostnames, self.web_port or self.port)
             self.bonjour.start()
         _write_private(self.dir / "service.json", json.dumps({
             "pid": os.getpid(), "port": self.port, "token": self.token, "version": VERSION,
@@ -2034,7 +2051,20 @@ class DashboardServer:
     def hosts(self, lan: bool = True) -> set[str]:
         """Host header values this dashboard answers to. lan=False: this machine's own names only."""
         names = ["127.0.0.1", "localhost"] + (self.lan_hostnames if lan else [])
-        return {f"{n}:{self.port}" for n in names}
+        out = {f"{n}:{self.port}" for n in names}
+        if lan and self.web_port:
+            out |= {f"{n}:{self.web_port}" for n in self.lan_hostnames}
+            if self.web_port == 80:  # browsers leave the default port out of Host and Origin
+                out |= set(self.lan_hostnames)
+        return out
+
+    def lan_url(self, name: str) -> str:
+        port = self.web_port or self.port
+        return f"http://{name}{'' if port == 80 else f':{port}'}/{'?t=' + self.token if self.lan_token else ''}"
+
+    def open_host(self, host: str) -> bool:
+        """True when this Host may skip the token (a LAN name, with lan_token off)."""
+        return not self.lan_token and host.rsplit(":", 1)[0] in self.lan_hostnames
 
     def frameio_redirect(self) -> str:
         """Where Adobe sends the browser back to. Must be listed on the Adobe credential."""
@@ -2043,6 +2073,9 @@ class DashboardServer:
     def stop(self) -> None:
         if self.bonjour:
             self.bonjour.stop()
+        if self.httpd_web:
+            self.httpd_web.shutdown()
+            self.httpd_web.server_close()
         if self.httpd:
             self.httpd.shutdown()
             self.httpd.server_close()
@@ -2154,6 +2187,8 @@ def _make_handler(dash: DashboardServer):
                 return None
             parsed = urllib.parse.urlparse(self.path)
             qs = urllib.parse.parse_qs(parsed.query)
+            if dash.open_host(host):
+                return parsed.path, qs
             tok = self.headers.get("X-RCB-Token") or ("" if header_only else (qs.get("t") or [""])[0])
             if not secrets.compare_digest(tok.encode("utf-8"), dash.token.encode("utf-8")):
                 self._send(401, {"error": "Missing or wrong access token. Open the dashboard from the menu bar "
@@ -2394,11 +2429,13 @@ class ServiceRunner:
         if cfg["dashboard"]["enabled"]:
             try:
                 self.dash = DashboardServer(self.svc, port=cfg["dashboard"]["port"],
-                                            lan_hostnames=cfg["dashboard"].get("lan_hostnames") or [])
+                                            lan_hostnames=cfg["dashboard"].get("lan_hostnames") or [],
+                                            lan_web_port=cfg["dashboard"].get("lan_web_port"),
+                                            lan_token=cfg["dashboard"].get("lan_token", True))
                 self.dash.start()
                 log.info("Dashboard running at http://127.0.0.1:%d/", self.dash.port)
                 for n in self.dash.lan_hostnames:
-                    log.info("Dashboard also on the network at http://%s:%d/", n, self.dash.port)
+                    log.info("Dashboard also on the network at %s", self.dash.lan_url(n).split("?")[0])
             except OSError as e:
                 log.error("Dashboard could not start: %s", e)
                 self.dash = None

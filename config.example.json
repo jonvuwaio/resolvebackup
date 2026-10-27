@@ -19,7 +19,7 @@
   "min_free_gb": 5,
   "fallback_min_interval_minutes": 120,
   "retention": { "keep_all_hours": 24, "keep_daily_days": 30 },
-  "dashboard": { "enabled": true, "port": 8765, "lan_hostnames": [] },
+  "dashboard": { "enabled": true, "port": 8765, "lan_hostnames": [], "lan_web_port": 80, "lan_token": true },
   "resolve_script_api": null,
   "resolve_script_lib": null
 }

@@ -303,6 +303,24 @@ class DashboardTests(LiveBase):
                                   host=lan)[0], 200)
         self.assertEqual(self.req("GET", "/frameio/callback?code=x&state=y", host=lan)[0], 403)  # sign-in: local only
 
+    def test_lan_without_token_and_on_web_port(self):
+        self.dash = rcb.DashboardServer(self.svc, port=0, html_path=self.html, token=TOKEN, state_dir=self.tmp,
+                                        lan_hostnames=["colour.test"], lan_web_port=0, lan_token=False)
+        self.dash.start()
+        self.addCleanup(self.dash.stop)
+        self.assertTrue(self.dash.web_port)
+        self.assertEqual(self.dash.lan_url("colour.test"), f"http://colour.test:{self.dash.web_port}/")
+        lan = f"colour.test:{self.dash.port}"
+        self.assertEqual(self.req("GET", "/api/status", host=lan)[0], 200)                    # no token via LAN name
+        self.assertEqual(self.req("GET", "/api/status")[0], 401)                              # 127.0.0.1 still needs it
+        self.assertEqual(self.req("GET", "/api/status", host=f"evil.example:{self.dash.port}")[0], 403)
+        self.assertEqual(self.req("POST", "/api/run-now", {"Origin": "https://evil.example"}, body={}, host=lan)[0], 403)
+        self.assertEqual(self.req("POST", "/api/run-now", {"Origin": f"http://{lan}"}, body={}, host=lan)[0], 200)
+        c = http.client.HTTPConnection("127.0.0.1", self.dash.web_port, timeout=5)              # second listener
+        c.request("GET", "/api/status", headers={"Host": f"colour.test:{self.dash.web_port}"})
+        self.assertEqual(c.getresponse().status, 200)
+        c.close()
+
     def test_post_needs_header_token_and_same_origin(self):
         self.assertEqual(self.req("POST", f"/api/run-now?t={TOKEN}", body={})[0], 401)   # query token not enough
         self.assertEqual(self.req("POST", "/api/run-now", {**self.AUTH, "Origin": "https://evil.example"},

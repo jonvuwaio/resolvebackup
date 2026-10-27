@@ -132,7 +132,7 @@ Windows `%APPDATA%\resolve-cloud-backup`, Linux `~/.config/resolve-cloud-backup`
 
 ## Configuration (`config.json` in that folder, or the dashboard's Settings drawer)
 
-Changes apply from the next cycle without restarting. Only the dashboard port and `lan_hostnames` need a restart.
+Changes apply from the next cycle without restarting. Only the `dashboard` settings need a restart.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -157,7 +157,9 @@ Changes apply from the next cycle without restarting. Only the dashboard port an
 | `min_free_gb` | `5` | Skip the cycle if the backup disk is nearly full. |
 | `with_stills_and_luts` | `true` | Passed to `ExportProject`. |
 | `dashboard` | `{enabled: true, port: 8765}` | The local live dashboard. If the port is taken the next free one (up to +19) is used. `alert_command` isn't editable from the browser, on purpose. |
-| `dashboard.lan_hostnames` | `[]` | Names other machines may use for the dashboard, e.g. `["colour.local"]`. When set, the dashboard also listens on the network and accepts those names; every request still needs the access token, and Frame.io sign-in still has to be done on this machine. On a Mac each `.local` name is advertised by Bonjour, so other machines find it with no DNS setup: open `http://colour.local:8765/?t=<token>` (the token is in the menu bar icon's dashboard link). Traffic is plain HTTP, so use it only on a network you trust. |
+| `dashboard.lan_hostnames` | `[]` | Names other machines may use for the dashboard, e.g. `["colour.local"]`. When set, the dashboard also listens on the network and accepts those names; Frame.io sign-in still has to be done on this machine. On a Mac each `.local` name is advertised by Bonjour, so other machines find it with no DNS setup. Traffic is plain HTTP, so use it only on a network you trust. |
+| `dashboard.lan_web_port` | `80` | With `lan_hostnames`, also serve the dashboard on this port, so port 80 gives plain `http://colour.local`. If the port is taken the dashboard carries on without it (see the log). `null` = off. |
+| `dashboard.lan_token` | `true` | `false` lets anyone on the network open the dashboard through a `lan_hostnames` name without the access token. `127.0.0.1` still needs it, and the host and same-origin checks still block other websites. |
 
 ## Projects open elsewhere
 
