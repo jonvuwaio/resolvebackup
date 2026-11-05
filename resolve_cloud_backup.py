@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import contextlib
 import copy
 import datetime as dt
 import fnmatch
@@ -63,7 +64,7 @@ import project_setup
 import vidchecker
 
 APP = "resolve-cloud-backup"
-VERSION = "1.28.0"
+VERSION = "1.29.4"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -647,12 +648,61 @@ def pid_alive(pid: int) -> bool:
 
 
 WATCHDOG_FLAG = "--rcb-watchdog"
+DEADLINE_FILE = "hidden_deadline.json"
+PROJECT_LIMIT = 60    # seconds the hidden Resolve gets to make a new project (normally about 15)
+EXPORT_LIMIT = 180    # ...and to back up one project (normally well under a minute)
+
+
+class TimeLimit:
+    """A time limit on a call into the hidden Resolve that holds even if the call never comes back. Resolve's
+    scripting library keeps Python's lock while it waits, so a stuck call freezes this whole app, timers and
+    dashboard included. The limit is written to a file instead and the watchdog, a separate process, stops the
+    hidden Resolve once it passes; the stuck call then returns."""
+
+    def __init__(self, path: Path, clock=time.time):
+        self.path, self.clock = Path(path), clock
+        self.fired = False
+
+    @contextlib.contextmanager
+    def __call__(self, pid: int | None, seconds: float, what: str):
+        if pid is None:  # the user's own Resolve: never stopped by us
+            yield self
+            return
+        self.fired = False
+        try:
+            write_atomic(self.path, json.dumps({"pid": pid, "until": self.clock() + seconds,
+                                                     "seconds": seconds, "what": what}))
+        except OSError as e:
+            log.warning("Could not set a time limit for %s: %s", what, e)
+        try:
+            yield self
+        finally:
+            self.fired = bool((self.read() or {}).get("fired"))
+            self.path.unlink(missing_ok=True)
+
+    def read(self) -> dict | None:
+        try:
+            return json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return None
+
+    def overdue(self, pid: int) -> dict | None:
+        """The limit for this Resolve, if it has passed and hasn't been acted on yet; marks it acted on."""
+        d = self.read()
+        if not d or d.get("pid") != pid or d.get("fired") or self.clock() < d.get("until", float("inf")):
+            return None
+        d["fired"] = True
+        try:
+            write_atomic(self.path, json.dumps(d))
+        except OSError:
+            pass
+        return d
 
 
 def watchdog_command(app_pid: int, resolve_pid: int, cfg_path: Path, conf: Path, saved: Path) -> list[str]:
     """How to start the watchdog: this same program (the packaged app's executable, or this script)."""
     arg = json.dumps({"app": app_pid, "resolve": resolve_pid, "config": str(cfg_path), "conf": str(conf),
-                      "saved": str(saved)})
+                      "saved": str(saved), "deadline": str(Path(saved).parent / DEADLINE_FILE)})
     if getattr(sys, "frozen", False):
         return [sys.executable, WATCHDOG_FLAG, arg]
     return [sys.executable, str(Path(__file__).resolve()), WATCHDOG_FLAG, arg]
@@ -666,13 +716,24 @@ def start_watchdog(cmd: list[str]) -> None:
         log.warning("Could not start the watchdog for the hidden DaVinci Resolve: %s", e)
 
 
-def run_watchdog(arg: str, alive=pid_alive, sleep=time.sleep, hidden_factory=None) -> int:
+def run_watchdog(arg: str, alive=pid_alive, sleep=time.sleep, hidden_factory=None, clock=time.time) -> int:
     """Outlives this app for as long as a hidden Resolve it started runs. If the app stops (crash, force-quit)
     first, quit the hidden Resolve properly, put back the user's library choice and, if they had tried to open
-    Resolve meanwhile, open it for them. Otherwise it does nothing: the app tidies up itself."""
+    Resolve meanwhile, open it for them. If a call into the hidden Resolve runs past its TimeLimit, stop that
+    Resolve so the app (frozen by the call) carries on. Otherwise it does nothing: the app tidies up itself."""
     a = json.loads(arg)
     app_pid, resolve_pid = int(a["app"]), int(a["resolve"])
     lib = ActiveLibrary(Path(a["conf"]), Path(a["saved"]))
+    limit = TimeLimit(a["deadline"], clock=clock) if a.get("deadline") else None
+
+    def hidden():
+        try:
+            cfg = load_config(Path(a["config"]))
+        except (OSError, ValueError):
+            cfg = copy.deepcopy(DEFAULTS)
+        h = (hidden_factory or HiddenResolve)(cfg)
+        h.adopt(resolve_pid)
+        return h
     while True:
         if not alive(resolve_pid):
             if not alive(app_pid):
@@ -680,14 +741,19 @@ def run_watchdog(arg: str, alive=pid_alive, sleep=time.sleep, hidden_factory=Non
             return 0
         if not alive(app_pid):
             break
+        over = limit.overdue(resolve_pid) if limit else None
+        if over:
+            log.warning("The hidden DaVinci Resolve stopped answering while %s (over %d s); stopping it",
+                        over.get("what", "working"), over.get("seconds", 0))
+            h = hidden()
+            h._signal(signal.SIGTERM)
+            if not h._wait_exit(20):
+                h._signal(signal.SIGKILL)
+                h._wait_exit(10)
+            continue  # the app sees it gone and tidies up as usual
         sleep(1)
     log.warning("Colour Project Manager stopped while a hidden DaVinci Resolve was running; quitting it")
-    try:
-        cfg = load_config(Path(a["config"]))
-    except (OSError, ValueError):
-        cfg = copy.deepcopy(DEFAULTS)
-    h = (hidden_factory or HiddenResolve)(cfg)
-    h.adopt(resolve_pid)
+    h = hidden()
     h.on_exit = lib.restore
     h.quit()
     return 0
@@ -1087,6 +1153,7 @@ class Backup:
         self.connect = connect or connect_resolve
         self.clock = clock or dt.datetime.now
         self.sleep = sleep or (lambda s: threading.Event().wait(s))
+        self.limit = Backup.no_limit  # wraps each call into Resolve; see TimeLimit
         self.status = status or LiveStatus()
         self._t0 = time.monotonic()
 
@@ -1413,9 +1480,14 @@ class Backup:
     def project_dir(self, folder: str, path: list[str], name: str) -> Path:
         return self.root.joinpath(safe_name(folder), *[safe_name(p) for p in path], safe_name(name))
 
+    @staticmethod
+    def no_limit(what):
+        return contextlib.nullcontext()
+
     def _direct(self, pm, name: str, tmp: Path) -> bool:
         try:
-            pm.ExportProject(name, str(tmp), self.cfg["with_stills_and_luts"])
+            with self.limit(f"backing up {name}"):
+                pm.ExportProject(name, str(tmp), self.cfg["with_stills_and_luts"])
         except Exception as e:  # noqa: BLE001
             log.warning("ExportProject(%r) raised: %s", name, e)
         return tmp.exists() and tmp.stat().st_size > 0
@@ -1423,7 +1495,8 @@ class Backup:
     def _via_load(self, pm, name: str, tmp: Path) -> bool:
         proj = None
         try:
-            proj = pm.LoadProject(name)
+            with self.limit(f"opening {name}"):
+                proj = pm.LoadProject(name)
             if not proj:
                 return False
             return self._direct(pm, name, tmp)
@@ -1574,6 +1647,7 @@ class Service:
                                                               self.dir / "activedb.conf.saved")
         self.watchdog = watchdog or (lambda pid: start_watchdog(watchdog_command(
             os.getpid(), pid, self.cfg_path, self.active_library.path, self.active_library.saved)))
+        self.time_limit = TimeLimit(Path(self.active_library.saved).parent / DEADLINE_FILE)
         self.backup = Backup(self.cfg, self.dir / "state.json", connect=connect, clock=clock,
                              status=self.status, sleep=lambda s: self._stop.wait(s))
         # reads config.json itself, so a drive added from the dashboard works at once, even mid-backup
@@ -1762,6 +1836,7 @@ class Service:
         try:
             hidden = self._hidden_session()
             if hidden:
+                self.backup.limit = lambda what: self.time_limit(hidden.pid, EXPORT_LIMIT, what)
                 status = self.backup.cycle(
                     connect=lambda cfg: hidden.connect(cfg, lambda: self.stopping),
                     interrupted=lambda: self.stopping or hidden.wanted() or self.setup.has_pending()
@@ -1781,6 +1856,7 @@ class Service:
                     self.status.set(resolve={"connected": False})
             except Exception:  # noqa: BLE001
                 log.exception("Could not quit the hidden DaVinci Resolve")
+            self.backup.limit = Backup.no_limit
             self._in_cycle = False
             lock.release()
         retry = status in ("resolve_unavailable", "error", "no_project_manager", "backup_dir_unavailable")
@@ -1872,7 +1948,14 @@ class Service:
                         return fail(f"There's no backup of the template project {tpl} to copy into {job['library']}.")
                     src = Path(tmp) / "template.drp"
                     shutil.copyfile(backup, src)  # a copy, so Resolve never works on the backup itself
-                return make_resolve_project(pm, job, Path(tmp), template_drp=src)
+                with self.time_limit(h.pid if h else None, PROJECT_LIMIT, f"making {job['project']}") as t:
+                    res = make_resolve_project(pm, job, Path(tmp), template_drp=src)
+                if t.fired:
+                    log.warning("Gave up making %s: the hidden DaVinci Resolve stopped answering", job["project"])
+                    return fail(f"DaVinci Resolve stopped answering while making the project, so it was stopped "
+                                f"after {PROJECT_LIMIT} seconds. The project may have been made anyway: "
+                                "press Retry, which won't make a second copy.")
+                return res
         finally:
             if h:
                 try:
@@ -1961,6 +2044,9 @@ class BonjourAlias:
 
     def start(self) -> None:
         if self.names and SYSTEM == "Darwin" and os.path.exists("/usr/bin/dns-sd"):
+            # a copy of this app that quit without stopping (force quit, crash) leaves its dns-sd running
+            subprocess.run(["/usr/bin/pkill", "-f", "^/usr/bin/dns-sd -P Colour Project Manager "], check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             threading.Thread(target=self._loop, name="bonjour", daemon=True).start()
 
     def _loop(self) -> None:
@@ -2433,6 +2519,7 @@ class ServiceRunner:
                                             lan_web_port=cfg["dashboard"].get("lan_web_port"),
                                             lan_token=cfg["dashboard"].get("lan_token", True))
                 self.dash.start()
+                self.svc.setup.refresh_scan()  # so the first New project page doesn't wait for the drives
                 log.info("Dashboard running at http://127.0.0.1:%d/", self.dash.port)
                 for n in self.dash.lan_hostnames:
                     log.info("Dashboard also on the network at %s", self.dash.lan_url(n).split("?")[0])

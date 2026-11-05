@@ -58,6 +58,9 @@ _JOB_NAME_RE = re.compile(r"^([A-Z]{1,3}\d{3,5})_([A-Za-z0-9][A-Za-z0-9_-]*)$")
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 
+SCAN_TTL = 60  # seconds before the drives are scanned again (in the background)
+DRIVE_TIMEOUT = 3        # seconds a quick look at a network drive may take before it counts as not answering
+SCAN_DRIVE_TIMEOUT = 30  # the same for reading every job folder on one drive
 JOB_LIST_TTL = 120  # seconds the job list from the sheet is kept before it's fetched again
 
 PERMISSION_HELP = ("macOS didn't let Colour Project Manager write there. Allow it under System Settings > Privacy & Security "
@@ -71,6 +74,14 @@ def _junk(name: str) -> bool:
 def fill(text: str, values: dict) -> str:
     """Put the job's details into a path or folder name. Unknown {words} are left alone."""
     return _PLACEHOLDER_RE.sub(lambda m: values.get(m.group(1), m.group(0)), text)
+
+
+def _list_job(fields: dict, values: dict) -> dict:
+    """The job list entry the job was picked from, when its name was tweaked before Create."""
+    src = fields.get("list_job")
+    if isinstance(src, str) and src.strip() and src.strip() != values["job"] and len(src) <= 150:
+        return {"list_job": src.strip()}
+    return {}
 
 
 def job_values(fields: dict, today: dt.date | None = None) -> dict:
@@ -367,6 +378,42 @@ def mounted_shares(run=subprocess.run) -> dict[str, str]:
     return shares
 
 
+def _writable_ancestor(dest: Path) -> tuple[Path, bool]:
+    """The nearest folder above dest that exists, and whether this app can write in it."""
+    anc = dest.parent
+    while not anc.exists() and anc != anc.parent:
+        anc = anc.parent
+    return anc, os.access(anc, os.W_OK)
+
+
+def _read_place(pattern: str) -> dict:
+    """What's already in one place jobs go: {"names": every folder name, "clients": client folders,
+    "entries": [(client folder or None, name, job folder path or None)]}. One pass over the drive."""
+    out: dict = {"names": set(), "clients": [], "entries": []}
+    head = pattern.split("{", 1)[0]
+    rest = pattern[len(head):]
+    base = Path(head)
+    if not head.endswith("/") or not base.is_dir():
+        return out
+    job = lambda p: str(p) if _JOB_RE.match(p.name) and p.is_dir() else None  # noqa: E731
+    try:
+        for c in base.iterdir():
+            out["names"].add(c.name)
+            if rest.startswith("{client_folder}/"):
+                if not c.is_dir():
+                    continue
+                kids = list(c.iterdir())
+                out["names"].update(j.name for j in kids)
+                if rest.startswith("{client_folder}/{job}") and not _junk(c.name):
+                    out["clients"].append(c.name)
+                    out["entries"] += [(c.name, j.name, job(j)) for j in kids]
+            elif rest.startswith("{job}"):
+                out["entries"].append((None, c.name, job(c)))
+    except OSError:
+        pass
+    return out
+
+
 def _volume_missing(path: Path, volumes: Path, is_mount=lambda p: True) -> str | None:
     """The drive's name if `path` is on a drive under /Volumes that isn't connected. A folder there that isn't a
     mount point is a leftover on this Mac's own disk (macOS leaves one when a share drops), so it counts as missing:
@@ -408,6 +455,13 @@ class ProjectSetup:
         self._mlock = threading.RLock()  # the record file
         self._queue: list[str] = []      # record ids whose Resolve project is still to be made
         self._scan_cache: tuple[float, tuple, dict] | None = None
+        self._scan_lock = threading.Lock()   # one scan of the drives at a time
+        self._scan_gen = 0                   # bumped when the drives change under us (a job was made)
+        self._scan_refreshing = False
+        self._stuck: dict[str, threading.Thread] = {}  # drive -> a read of it that hasn't come back yet
+        self._stuck_lock = threading.Lock()
+        self._place_cache: dict[str, dict] = {}        # path pattern -> its last complete read, for when it hangs
+        self._templates_cache = None
         self._forget_unfinished()
 
     # ---- config
@@ -437,21 +491,34 @@ class ProjectSetup:
                 used.add(Path(p["path"].split("{", 1)[0]).relative_to(self.volumes).parts[0])
             except (ValueError, IndexError):
                 pass
-        out = []
         try:
-            for v in sorted(self.volumes.iterdir(), key=lambda p: p.name.lower()):
-                if v.is_dir() and not _junk(v.name) and v.name not in used and self.is_mount(v):
-                    out.append({"name": v.name, "path": str(v), "has_projects": (v / "Projects").is_dir()})
+            vols = sorted((v for v in self.volumes.iterdir() if not _junk(v.name) and v.name not in used),
+                          key=lambda p: p.name.lower())
         except OSError:
-            pass
-        return out
+            return []
+        look = lambda v: (v.is_dir() and self.is_mount(v), (v / "Projects").is_dir())  # noqa: E731
+        res = self._on_drives([(v, lambda v=v: look(v)) for v in vols], DRIVE_TIMEOUT)
+        return [{"name": v.name, "path": str(v), "has_projects": got[1]}
+                for v, (ok, got) in zip(vols, res) if ok and got and got[0]]
 
     def templates(self) -> tuple[dict[str, list[str]], str | None]:
-        """{template name: [folder paths inside it, parents first]}, plus a problem to show, if any."""
+        """{template name: [folder paths inside it, parents first]}, plus a problem to show, if any. When the drive
+        they're on doesn't answer, the ones read last time are used."""
         d = self.cfg()["templates_dir"]
         if not d:
             return {}, "Choose the folder that holds your folder templates."
         root = Path(os.path.expanduser(d))
+        ok, got = self._on_drive(root, lambda: self._read_templates(root), SCAN_DRIVE_TIMEOUT)
+        if ok and got is not None:
+            if got[0]:
+                self._templates_cache = (str(root), got[0])
+            return got
+        last = self._templates_cache
+        if last and last[0] == str(root):
+            return last[1], None
+        return {}, f"The drive {self._drive_of(root) or root} isn't answering, so the templates can't be read."
+
+    def _read_templates(self, root: Path) -> tuple[dict[str, list[str]], str | None]:
         missing = _volume_missing(root, self.volumes, self.is_mount)
         if missing:
             return {}, f"The drive {missing} isn't connected, so the templates can't be read."
@@ -475,13 +542,96 @@ class ProjectSetup:
             dirs += [(rel / s).as_posix() for s in subdirs]
         return dirs
 
+    # ---- drives that don't answer
+    def _drive_of(self, path) -> str | None:
+        try:
+            rel = Path(str(path)).relative_to(self.volumes)
+        except ValueError:
+            return None
+        return rel.parts[0] if rel.parts else None
+
+    def not_answering(self) -> list[str]:
+        """Drives with a read still stuck (a hung network share). They're skipped until that read comes back."""
+        with self._stuck_lock:
+            for k in [k for k, t in self._stuck.items() if not t.is_alive()]:
+                del self._stuck[k]
+            return sorted(self._stuck)
+
+    def _on_drives(self, jobs: list, timeout: float) -> list:
+        """Runs each (path, fn) at once, each in its own thread. Returns [(True, result) or (False, None)]: False when
+        the path's drive didn't answer within timeout, or still hasn't from an earlier time. A hung network share
+        blocks the thread reading it, possibly for minutes, so the reads mustn't run where a page is waiting."""
+        stuck = set(self.not_answering())
+        out: list = [None] * len(jobs)
+        threads = []
+        for n, (path, fn) in enumerate(jobs):
+            drive = self._drive_of(path)
+            if drive in stuck:
+                out[n] = (False, None)
+                continue
+
+            def run(n=n, fn=fn):
+                try:
+                    out[n] = (True, fn())
+                except OSError:
+                    out[n] = (True, None)
+            t = threading.Thread(target=run, name=f"drive-{drive}", daemon=True)
+            t.start()
+            threads.append((n, drive, t))
+        end = time.monotonic() + timeout
+        for n, drive, t in threads:
+            t.join(max(0, end - time.monotonic()))
+            if t.is_alive():
+                out[n] = (False, None)
+                if drive:
+                    with self._stuck_lock:
+                        self._stuck[drive] = t
+        return out
+
+    def _on_drive(self, path, fn, timeout: float = DRIVE_TIMEOUT):
+        return self._on_drives([(path, fn)], timeout)[0]
+
     # ---- what already exists
     def _scan(self) -> dict:
-        """Job and client names from the backup record and from the drives, cached for a minute."""
+        """Job and client names from the backup record and from the drives. A scan older than SCAN_TTL is still
+        answered straight away while a fresh one runs in the background: walking the RAIDs during a backup can take
+        most of a minute, because Resolve's scripting library holds Python's lock for each call it makes."""
         locs = self.places()
         key = tuple(loc.get("path", "") for loc in locs)
-        if self._scan_cache and time.monotonic() - self._scan_cache[0] < 60 and self._scan_cache[1] == key:
-            return self._scan_cache[2]
+        hit = self._scan_cache
+        if hit and hit[1] == key:
+            if time.monotonic() - hit[0] >= SCAN_TTL:
+                self.refresh_scan()
+            return hit[2]
+        with self._scan_lock:
+            hit = self._scan_cache  # made while this waited
+            if hit and hit[1] == key:
+                return hit[2]
+            return self._scan_now(locs, key, self._scan_gen)
+
+    def refresh_scan(self) -> None:
+        """Scan the drives again in the background (also run once at start, so the first page is quick)."""
+        if self._scan_refreshing:
+            return
+        self._scan_refreshing = True
+
+        def run():
+            try:
+                with self._scan_lock:
+                    locs = self.places()
+                    self._scan_now(locs, tuple(loc.get("path", "") for loc in locs), self._scan_gen)
+            except Exception:  # noqa: BLE001 - the next request scans for itself
+                pass
+            finally:
+                self._scan_refreshing = False
+        threading.Thread(target=run, name="drive-scan", daemon=True).start()
+
+    def forget_scan(self) -> None:
+        """The drives just changed: the next look scans them again, and a scan already running isn't kept."""
+        self._scan_gen += 1
+        self._scan_cache = None
+
+    def _scan_now(self, locs: list, key: tuple, gen: int) -> dict:
         jobs: dict[str, str] = {}        # job_no -> a job name using it
         clients: dict[str, dict] = {}    # client folder -> {"client": name used in jobs, "last_job": ...}
         where: dict[str, list] = {}      # job_no -> [(index into places(), client folder or None, job folder path)]
@@ -515,44 +665,27 @@ class ProjectSetup:
                 clients.setdefault(segs[0], {"client": None, "last_job": None})
             for no in {job_no(x) for x in segs} - {None}:  # the job's own folder, or a project named after it
                 in_resolve.setdefault(no, []).append(f"{lib_names.get(db, db)} / {path}" if path != full else path)
-        for li, loc in enumerate(locs):
-            pattern = loc.get("path", "")
-            head = pattern.split("{", 1)[0]
-            if not head.endswith("/"):
-                continue
-            base = Path(head)
-            rest = pattern[len(head):]
-            try:
-                if rest.startswith("{client_folder}/{job}"):
-                    for c in base.iterdir():
-                        if c.is_dir() and not _junk(c.name):
-                            clients.setdefault(c.name, {"client": None, "last_job": None})
-                            for j in c.iterdir():
-                                note(c.name, j.name)
-                                if job_no(j.name) and j.is_dir():
-                                    where.setdefault(job_no(j.name), []).append((li, c.name, str(j)))
-                elif rest.startswith("{job}"):
-                    for j in base.iterdir():
-                        note(None, j.name)
-                        if job_no(j.name) and j.is_dir():
-                            where.setdefault(job_no(j.name), []).append((li, None, str(j)))
-            except OSError:
-                continue
         names: set[str] = set()   # every job name seen, to tell which jobs in the list are already set up
         for full in self.known_names():
             names.update((full.partition("::")[2] or full).split("/"))
-        for loc in locs:
-            head = loc.get("path", "").split("{", 1)[0]
-            try:
-                if head.endswith("/") and Path(head).is_dir():
-                    for c in Path(head).iterdir():
-                        names.add(c.name)
-                        if c.is_dir() and loc.get("path", "")[len(head):].startswith("{client_folder}/"):
-                            names.update(j.name for j in c.iterdir())
-            except OSError:
+        patterns = [loc.get("path", "") for loc in locs]
+        reads = self._on_drives([(x.split("{", 1)[0], lambda x=x: _read_place(x)) for x in patterns], SCAN_DRIVE_TIMEOUT)
+        for li, (pattern, (ok, got)) in enumerate(zip(patterns, reads)):
+            if ok and got is not None:
+                self._place_cache[pattern] = got
+            got = got if ok and got is not None else self._place_cache.get(pattern)  # hung: what it had last time
+            if not got:
                 continue
+            names |= got["names"]
+            for c in got["clients"]:
+                clients.setdefault(c, {"client": None, "last_job": None})
+            for folder, name, path in got["entries"]:
+                note(folder, name)
+                if path:
+                    where.setdefault(job_no(name), []).append((li, folder, path))
         val = {"jobs": jobs, "clients": clients, "names": names, "where": where, "in_resolve": in_resolve}
-        self._scan_cache = (time.monotonic(), key, val)
+        if gen == self._scan_gen:
+            self._scan_cache = (time.monotonic(), key, val)
         return val
 
     def job_list(self, fresh: bool = False) -> dict:
@@ -573,12 +706,20 @@ class ProjectSetup:
                 if not hit or hit[1] != url:
                     return {"configured": True, "names": [], "problem": why}
                 self._jobs_cache = (time.monotonic() - JOB_LIST_TTL + 30, url, hit[2])  # try again in 30 s
-        known = self._scan()["names"] | {r.get("job") for r in self.recent(500) if any(x.get("ok") for x in r.get("locations", []))}
+        # set up = a job by that name exists, one was made from this list entry under a tweaked name, or the
+        # job number already has folders on the drives (renamed by hand after it was made)
+        scan = self._scan()
+        made = [r for r in self.recent(500) if any(x.get("ok") for x in r.get("locations", []))]
+        known = scan["names"] | {r.get("job") for r in made} | {(r.get("fields") or {}).get("list_job") for r in made}
 
         def number(n):
             m = _JOB_RE.match(n)
             return (m.group(1), int(m.group(2))) if m else ("", 0)
-        rows = [{"job": n, "done": n in known} for n in self._jobs_cache[2]]
+
+        def done(n):
+            m = _JOB_RE.match(n)
+            return n in known or bool(m and (m.group(1) + m.group(2)).upper() in scan["where"])
+        rows = [{"job": n, "done": done(n)} for n in self._jobs_cache[2]]
         rows.sort(key=lambda r: number(r["job"]), reverse=True)
         return {"configured": True, "names": rows, "problem": self._jobs_problem}
 
@@ -612,21 +753,29 @@ class ProjectSetup:
             vols = []
         results: dict[str, object] = {}
 
-        def measure(v: Path):
+        def measure(v: Path):  # even looking at a hung share's mount point can block, so all of it is in here
             try:
-                results[v.name] = self.usage(v)
+                if v.is_symlink() and os.path.realpath(v) == "/":
+                    results[v.name] = "own disk"  # this Mac's own disk
+                elif not self.is_mount(v):
+                    results[v.name] = "leftover"  # an empty folder a dropped share left behind
+                else:
+                    results[v.name] = self.usage(v)
             except (OSError, subprocess.SubprocessError) as e:
                 results[v.name] = e if isinstance(e, OSError) else OSError("it didn't answer")
-        vols = [v for v in vols if not (v.is_symlink() and os.path.realpath(v) == "/")]  # this Mac's own disk
-        leftovers = {v.name for v in vols if not self.is_mount(v)}  # empty folders a dropped share left behind
-        vols = [v for v in vols if v.name not in leftovers]
         shares = self.shares()  # mount point -> share name, to spot a share connected under another name
-        threads = [threading.Thread(target=measure, args=(v,), daemon=True) for v in vols]
+        stuck = set(self.not_answering())
+        threads = [threading.Thread(target=measure, args=(v,), daemon=True) for v in vols if v.name not in stuck]
         for t in threads:
             t.start()
         end = time.monotonic() + timeout
-        for t in threads:
+        for v, t in zip([v for v in vols if v.name not in stuck], threads):
             t.join(max(0, end - time.monotonic()))
+            if t.is_alive():
+                with self._stuck_lock:
+                    self._stuck.setdefault(v.name, t)
+        leftovers = {n for n, r in results.items() if r == "leftover"}
+        vols = [v for v in vols if results.get(v.name) not in ("own disk", "leftover")]
         out = []
         for v in vols:
             u = results.get(v.name)
@@ -681,7 +830,8 @@ class ProjectSetup:
                 "placeholders": list(PLACEHOLDERS), "recent": self.recent(10), "volumes": self.volumes_list(),
                 "last_drive": self.last_drive(), "libraries": sorted(self.libraries(), key=str.lower),
                 "frameio": self.frameio.status() if self.frameio else None,
-                "job_list": self.job_list(fresh), "library_projects": self.library_projects()}
+                "job_list": self.job_list(fresh), "library_projects": self.library_projects(),
+                "not_answering": self.not_answering()}
 
     def last_drive(self) -> str | None:
         """The project drive used for the most recent job, so the list starts there."""
@@ -743,13 +893,18 @@ class ProjectSetup:
             else:
                 dest = Path(fill(loc.get("path", ""), values))
                 row["path"] = str(dest)
-                gone = _volume_missing(dest, self.volumes, self.is_mount)
-                if gone:
+                ok, look = self._on_drive(dest, lambda dest=dest: (
+                    _volume_missing(dest, self.volumes, self.is_mount), dest.exists(), _writable_ancestor(dest)))
+                gone, there, anc = look if ok and look else (None, False, None)
+                if not ok:
+                    row.update(status="not_answering", message=f"{self._drive_of(dest)} isn't answering. Check the "
+                               "drive or the network, then try again.")
+                elif gone:
                     row.update(status="drive_missing", message=f"{gone} isn't connected.")
                 elif tpl is None:
                     row.update(status="template_missing",
                                message=problem or f"There's no template called {loc.get('template')}.")
-                elif dest.exists():
+                elif there:
                     row.update(status="exists", message="Already exists. Nothing will be changed there.")
                 elif kind == "drive" and on_drive:
                     li, folder, path = on_drive
@@ -766,11 +921,8 @@ class ProjectSetup:
                                "made here.")
                 else:
                     row["folders"] = len(tpl)
-                    anc = dest.parent
-                    while not anc.exists() and anc != anc.parent:
-                        anc = anc.parent
-                    if not os.access(anc, os.W_OK):
-                        row.update(status="not_writable", message=f"Can't write to {anc}.")
+                    if not anc[1]:
+                        row.update(status="not_writable", message=f"Can't write to {anc[0]}.")
             locs.append(row)
         rv = c["resolve"]
         if rv["enabled"] and rv["library"] and rv["template"]:
@@ -913,7 +1065,7 @@ class ProjectSetup:
             if job and job["state"] == "queued":
                 with self._mlock:
                     self._queue.append(rid)
-            self._scan_cache = None
+            self.forget_scan()
             return {"ok": not failed, "id": rid, "job": values["job"], "results": results, "resolve": job}
         finally:
             self._lock.release()
@@ -967,7 +1119,7 @@ class ProjectSetup:
         with self._mlock:
             items = self._load()
             items.append({"id": rid, "at": self.clock().isoformat(timespec="seconds"), "job": values["job"],
-                          "fields": {k: values[k] for k in ("job", "client_folder")},
+                          "fields": {k: values[k] for k in ("job", "client_folder")} | _list_job(fields, values),
                           "locations": results, "resolve": resolve})
             self._save(items)
         return rid

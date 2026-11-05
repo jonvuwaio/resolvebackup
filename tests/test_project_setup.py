@@ -128,6 +128,65 @@ class SetupTests(unittest.TestCase):
         self.rig = Rig(self.d)
         self.s = self.rig.setup
 
+    def test_an_old_scan_is_answered_at_once_and_refreshed_behind(self):
+        clients = lambda: self.s._scan()["clients"]  # noqa: E731
+        self.assertNotIn("Acme", clients())
+        (self.rig.vol / "Colour-3-Raid/Projects/Acme/WC200_Acme_Spot").mkdir(parents=True)
+        self.assertNotIn("Acme", clients())                        # fresh enough: kept
+        at, key, val = self.s._scan_cache
+        self.s._scan_cache = (at - ps.SCAN_TTL - 1, key, val)
+        self.assertNotIn("Acme", clients())                        # old: still answered straight away...
+        for _ in range(200):
+            if not self.s._scan_refreshing:
+                break
+            __import__("time").sleep(0.01)
+        self.assertIn("Acme", clients())                           # ...and replaced behind the scenes
+
+    def test_a_hung_drive_is_skipped_not_waited_for(self):
+        import threading
+        import time
+        self.assertIn("AaronWheeler", self.s._scan()["clients"])     # read once while it answers
+        gate, real = threading.Event(), ps._read_place
+        self.addCleanup(gate.set)
+
+        def read(pattern):  # Colour-3-Raid stops answering, like a hung network share
+            if "Colour-3-Raid" in pattern:
+                gate.wait(10)
+            return real(pattern)
+        for k, v in {"_read_place": read, "SCAN_DRIVE_TIMEOUT": 0.2, "DRIVE_TIMEOUT": 0.2}.items():
+            old = getattr(ps, k)
+            setattr(ps, k, v)
+            self.addCleanup(setattr, ps, k, old)
+        self.s.forget_scan()
+        t0 = time.monotonic()
+        scan = self.s._scan()
+        self.assertLess(time.monotonic() - t0, 2)
+        self.assertIn("AaronWheeler", scan["clients"])                # what it had last time
+        self.assertEqual(self.s.not_answering(), ["Colour-3-Raid"])
+        self.s.forget_scan()
+        t0 = time.monotonic()
+        self.s._scan()
+        self.assertLess(time.monotonic() - t0, 0.15)                  # skipped at once while still stuck
+        p = self.s.plan(FIELDS, 0)
+        self.assertEqual(p["locations"][0]["status"], "not_answering")
+        self.assertFalse(p["can_create"])
+        self.assertEqual(self.s.payload()["not_answering"], ["Colour-3-Raid"])
+        gate.set()                                                    # it answers again
+        for _ in range(200):
+            if not self.s.not_answering():
+                break
+            time.sleep(0.01)
+        self.assertEqual(self.s.not_answering(), [])
+        self.assertEqual(self.s.plan(FIELDS, 0)["locations"][0]["status"], "ready")
+
+    def test_a_scan_started_before_a_job_was_made_isnt_kept(self):
+        locs = self.s.places()
+        key = tuple(x["path"] for x in locs)
+        gen = self.s._scan_gen
+        self.s.forget_scan()                                       # Create finished while that scan ran
+        self.s._scan_now(locs, key, gen)
+        self.assertIsNone(self.s._scan_cache)
+
     def test_templates_skip_hidden_and_junk(self):
         t, problem = self.s.templates()
         self.assertIsNone(problem)
@@ -333,6 +392,25 @@ class JobListTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)  # kept for a while
         self.s.job_list(fresh=True)
         self.assertEqual(len(self.calls), 2)
+
+    def test_a_tweaked_name_still_marks_its_list_entry_set_up(self):
+        r = self.s.create({"job": "WB260_Unit9_Saudia_SiteSeen", "list_job": "WB260_Unit9_SaudiaAirlines_SiteSeen",
+                           "client_folder": "Unit9"}, 0)
+        self.assertTrue(r["ok"])
+        self.assertTrue((self.rig.vol / "Colour-3-Raid/Projects/Unit9/WB260_Unit9_Saudia_SiteSeen").is_dir())
+        self.assertEqual(self.s.recent(1)[0]["fields"]["list_job"], "WB260_Unit9_SaudiaAirlines_SiteSeen")
+        done = {x["job"]: x["done"] for x in self.s.job_list(fresh=True)["names"]}
+        self.assertTrue(done["WB260_Unit9_SaudiaAirlines_SiteSeen"])
+        self.assertFalse(done["WB249_Dyson_308FH_ColourAdapt"])
+        # untweaked names aren't recorded twice
+        self.s.create({"job": "WB249_Dyson_308FH_ColourAdapt", "list_job": "WB249_Dyson_308FH_ColourAdapt",
+                       "client_folder": "Dyson"}, 0)
+        self.assertNotIn("list_job", self.s.recent(1)[0]["fields"])
+
+    def test_renamed_by_hand_on_the_drive_counts_by_job_number(self):
+        (self.rig.vol / "Colour-3-Raid/Projects/Dyson/WB249_Dyson_Adapt").mkdir(parents=True)
+        done = {x["job"]: x["done"] for x in self.s.job_list(fresh=True)["names"]}
+        self.assertTrue(done["WB249_Dyson_308FH_ColourAdapt"])
 
     def test_a_failed_read_keeps_the_last_list(self):
         self.s.job_list()

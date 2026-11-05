@@ -211,6 +211,10 @@ about 80 seconds hidden against about 17 minutes through an open Resolve.
 - **If the app stops during a hidden check** (crash, force-quit), a small watchdog (the app's own program, started
   alongside each hidden Resolve, idle otherwise) quits the hidden Resolve properly within a few seconds and puts back
   your library choice. If you had tried to open Resolve meanwhile, it then opens it for you.
+- **If the hidden Resolve stops answering** (a call into it never comes back), the watchdog stops it once the call
+  has run for 1 minute (making a new project, normally about 15 s) or 3 minutes (backing up one project). Such a call freezes the
+  whole app, dashboard included, so the limit is kept by the watchdog, not the app. The check or new project then
+  fails and is retried as usual; Retry on a new project never makes a second copy.
 - **If the hidden Resolve crashes,** the check ends and your library choice is put back straight away. Resolve may
   show its own crash-report window.
 - **If the power goes,** your library choice is put back when the app next starts (at login). Open Resolve before
@@ -237,8 +241,11 @@ DaVinci Resolve project with the bins, and its Frame.io project with the review 
    for you: the folder that client's jobs went in most recently. To pick another, type part of its name in the
    client folder box: the list narrows as you type (arrow keys and Enter, or click). Only existing folders can be
    picked, to keep typos out of it; **Type a name that isn't on the list…** and **New client folder…** are there
-   for the exceptions. A
-   typed job name starts with the next free number. Every path is previewed live.
+   for the exceptions. A job picked from the list lands in a name box below it, so a producer's name can be tidied
+   before **Create project**; the list still counts that entry as set up. A
+   typed job name starts with the next free number. Every path is previewed live. A network drive that stops answering (a hung share)
+   doesn't hold the page up: it's shown as not answering, its folders come from the last time it was read, and a job
+   can't be made on it until it answers again.
 
    The job list is read from a link to just the job names, published from Google Sheets, so the Job Report itself
    (budgets, contacts) stays private: make a sheet with `=IMPORTRANGE("<Job Report ID>", "CURRENT!G:G")` in A1,

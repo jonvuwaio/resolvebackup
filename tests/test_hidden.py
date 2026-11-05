@@ -548,6 +548,27 @@ class NewProjectServiceTests(LibraryRig):
         self.assertTrue(drp.exists())  # the backup itself is left alone
         self.assertEqual(self.conf.read_text(), ORIGINAL)
 
+    def test_a_resolve_that_stops_answering_is_given_up_on(self):
+        svc = self.service()
+        seen = {}
+
+        def stuck(drp, name):  # never comes back until the watchdog stops Resolve
+            seen.update(json.loads(svc.time_limit.path.read_text()))
+            self.assertIsNone(svc.time_limit.overdue(seen["pid"]))  # not yet
+            svc.time_limit.clock = lambda: seen["until"] + 1
+            self.assertTrue(svc.time_limit.overdue(seen["pid"]))  # what the watchdog does
+            self.fs.procs.pop(seen["pid"], None)
+            return False
+        self.pm.ImportProject = stuck
+        svc.setup.create(self.FIELDS)
+        svc.tick()
+        self.assertEqual((seen["seconds"], seen["what"]), (rcb.PROJECT_LIMIT, "making WC105_WSM_Varley_CV1"))
+        rec = svc.setup.recent(1)[0]["resolve"]
+        self.assertEqual(rec["state"], "failed")
+        self.assertIn("stopped answering", rec["message"])
+        self.assertFalse(svc.time_limit.path.exists())
+        self.assertEqual(self.fs.procs, {})
+
     def test_an_unknown_database_is_refused(self):
         row = self.service().setup.plan(self.FIELDS, None, "NotADatabase")["locations"][0]
         self.assertEqual(row["status"], "library_missing")
@@ -602,12 +623,43 @@ class SafetyTests(Base):
         self.lib = rcb.ActiveLibrary(self.conf, self.saved)
         self.dead = set()
 
-    def watchdog(self, app=1, resolve=None):
-        arg = json.dumps({"app": app, "resolve": resolve, "config": str(self.tmp / "none.json"),
-                          "conf": str(self.conf), "saved": str(self.saved)})
+    def watchdog(self, app=1, resolve=None, clock=None):
+        arg = json.loads(rcb.watchdog_command(app, resolve, self.tmp / "none.json", self.conf, self.saved)[-1])
         alive = lambda pid: pid not in self.dead and (pid == app or pid in self.fs.procs)  # noqa: E731
-        return rcb.run_watchdog(arg, alive=alive, sleep=lambda s: self.ticks.pop(0)() if self.ticks else None,
-                                hidden_factory=lambda cfg: self.hidden(cfg))
+        return rcb.run_watchdog(json.dumps(arg), alive=alive,
+                                sleep=lambda s: self.ticks.pop(0)() if self.ticks else None,
+                                hidden_factory=lambda cfg: self.hidden(cfg), clock=clock or (lambda: 0))
+
+    def test_watchdog_stops_a_hidden_resolve_stuck_past_its_time_limit(self):
+        h = self.hidden()
+        h.launch()
+        other = self.hidden()
+        other.launch()
+        now = [1000.0]
+        limit = rcb.TimeLimit(self.saved.parent / rcb.DEADLINE_FILE, clock=lambda: now[0])
+        self.saved.parent.mkdir(parents=True, exist_ok=True)
+        with limit(h.pid, 600, "making X") as t:
+            # a limit for another Resolve is none of this watchdog's business
+            self.ticks = [lambda: now.__setitem__(0, 1700.0), lambda: None, lambda: self.fs.procs.pop(other.pid)]
+            self.watchdog(resolve=other.pid, clock=lambda: now[0])
+            self.assertIn(h.pid, self.fs.procs)
+            self.assertEqual(self.fs.signals, [])
+            now[0] = 1000.0
+            self.ticks = [lambda: None, lambda: now.__setitem__(0, 1601.0)]  # in time, then over
+            self.watchdog(resolve=h.pid, clock=lambda: now[0])
+            self.assertNotIn(h.pid, self.fs.procs)
+            self.assertEqual(self.fs.signals, [signal.SIGTERM])
+        self.assertTrue(t.fired)
+        self.assertFalse(limit.path.exists())
+        with limit(h.pid, 600, "making Y") as t:
+            pass
+        self.assertFalse(t.fired)
+
+    def test_no_time_limit_on_the_users_own_resolve(self):
+        limit = rcb.TimeLimit(self.tmp / "d.json")
+        with limit(None, 1, "backing up X") as t:
+            self.assertFalse(limit.path.exists())
+        self.assertFalse(t.fired)
 
     def test_writes_are_atomic_and_keep_resolves_permissions(self):
         self.assertTrue(self.lib.point_at(C))

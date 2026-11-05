@@ -1108,11 +1108,14 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
                timer: null, seq: 0, plan: null, busy: false, done: false, editInitial: null, opener: null };
   const STATUS_WORD = { ready: "Ready", waiting: "Waiting for the job details", exists: "Already exists",
                         drive_missing: "Drive not connected", template_missing: "Template missing", not_writable: "Can't write here",
-                        not_connected: "Frame.io not connected", not_set_up: "Workspace not chosen", library_missing: "Database not found", found: "Already there", elsewhere: "Already elsewhere", unreachable: "Frame.io didn't answer" };
+                        not_answering: "Drive not answering", not_connected: "Frame.io not connected", not_set_up: "Workspace not chosen", library_missing: "Database not found", found: "Already there", elsewhere: "Already elsewhere", unreachable: "Frame.io didn't answer" };
   const TYPED = "__typed__", NEWC = "__new__";
-  const npFields = () => ({
-    job: ($("npJobSel").value === TYPED ? $("npJobName").value : $("npJobSel").value).trim(),
-    client_folder: ($("npClientSel").value === NEWC ? $("npClientFolder").value : $("npClientSel").value).trim() });
+  // a job picked from the list fills the name box, where it can still be tidied; list_job keeps the list's name
+  const npFields = () => {
+    const sel = $("npJobSel").value;
+    return { job: (sel ? $("npJobName").value : "").trim(), ...(sel && sel !== TYPED ? { list_job: sel } : {}),
+             client_folder: ($("npClientSel").value === NEWC ? $("npClientFolder").value : $("npClientSel").value).trim() };
+  };
   // a typed job name starts with the next free number; picking a client fills in its usual name after it
   const JOB_START = /^([A-Z]{1,3}\d{3,5})_(?:([A-Za-z0-9-]*)_)?$/;
 
@@ -1129,14 +1132,20 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     else if (!jl.names.length && !jl.configured) sel.value = TYPED;
     $("npJobRefresh").hidden = !jl.configured;
     syncJobTyped(d);
-    const hint = jl.problem ? jl.problem : !jl.configured ? "No job list is set up yet, so names have to be typed. It's added in Settings." : "";
-    $("npJobHint").textContent = sel.value === TYPED ? [(d.next_job_no ? `Next free number is ${d.next_job_no}.` : ""), hint].join(" ").trim() : hint;
-    $("npJobHint").classList.toggle("bad-text", !!jl.problem);
   }
   function syncJobTyped(d) {
-    const typed = $("npJobSel").value === TYPED;
-    $("npJobName").hidden = !typed;
+    const sel = $("npJobSel").value, typed = sel === TYPED;
+    $("npJobName").hidden = !sel;
     if (typed && !$("npJobName").value && d && d.next_job_no) $("npJobName").value = d.next_job_no + "_";
+    syncJobHint(d);
+  }
+  function syncJobHint(d) {
+    const jl = (d && d.job_list) || {}, sel = $("npJobSel").value, name = $("npJobName").value.trim();
+    const hint = jl.problem ? jl.problem : !jl.configured ? "No job list is set up yet, so names have to be typed. It's added in Settings." : "";
+    const lead = sel === TYPED ? (d && d.next_job_no ? `Next free number is ${d.next_job_no}.` : "")
+      : !sel ? "" : name === sel ? "Tidy the name here if it needs it." : `Changed from the job list's ${sel}.`;
+    $("npJobHint").textContent = [lead, hint].join(" ").trim();
+    $("npJobHint").classList.toggle("bad-text", !!jl.problem);
   }
   // the Resolve database the job's project goes in: the one in Settings unless another is picked
   function renderLibChoices(d) {
@@ -1263,7 +1272,9 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     NP.drive = idx; sel.value = idx == null ? "" : String(idx);
     $("npNoDrive").hidden = idx != null;
     renderClientChoices(d); renderJobChoices(d); renderLibChoices(d);
-    $("npProblem").hidden = !d.templates_problem; $("npProblem").textContent = d.templates_problem || "";
+    const hung = (d.not_answering || []).length ? `${d.not_answering.join(", ")} ${d.not_answering.length > 1 ? "aren't" : "isn't"} answering, so ${d.not_answering.length > 1 ? "their" : "its"} folders may be out of date here. Check the drive or the network.` : "";
+    const problems = [d.templates_problem, hung].filter(Boolean).join(" ");
+    $("npProblem").hidden = !problems; $("npProblem").textContent = problems;
     $("npSoon").hidden = !!(c.frameio && c.frameio.enabled);
   }
 
@@ -1337,11 +1348,12 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     const id = ev.target.id;
     if (id === "npJobName" || id === "npClientFolder") { const v = ev.target.value, n = v.replace(/\s+/g, id === "npJobName" ? "_" : " "); if (n !== v) ev.target.value = n; }
     if (id === "npJobSel") {
+      $("npJobName").value = ev.target.value === TYPED ? "" : ev.target.value;
       syncJobTyped(NP.data); renderJobChoices(NP.data);
       if (ev.target.value && ev.target.value !== TYPED) { pickClientFor(ev.target.value); NP.autoPlace = true; }
       else if (ev.target.value === TYPED) $("npJobName").focus();
     }
-    if (id === "npJobName") { pickClientFor(ev.target.value); NP.autoPlace = true; }
+    if (id === "npJobName") { pickClientFor(ev.target.value); NP.autoPlace = true; syncJobHint(NP.data); }
     if (id === "npClientSel") {
       syncClient();
       if (ev.target.value === NEWC) $("npClientFolder").focus();
@@ -1901,7 +1913,9 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   }
 
   async function showProjects() {
+    $("npMsg").className = "msg-line"; $("npMsg").textContent = "Reading the drives and the job list…";
     try { await loadSetup(); } catch (e) { $("npMsg").className = "msg-line bad"; $("npMsg").textContent = "Couldn't reach the service. Reload the page to try again."; return; }
+    $("npMsg").textContent = "";
     preview(); renderRecent();
     (NP.drive == null ? $("adVol") : $("npJobSel")).focus();
   }
