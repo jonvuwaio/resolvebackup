@@ -273,6 +273,13 @@ body.open #drawer { transform: none; visibility: visible; }
 .f .row > span { flex: none; color: var(--dim); }
 .f .num-row > input[type=number] { flex: none; width: 7.5em; }
 .check { display: flex; gap: 8px; align-items: center; font-weight: 500; }
+/* New project: only a spinner until the drives and job list have been read */
+#newDrawer.loading #npForm > :not(#npLoading), #newDrawer.loading footer { display: none; }
+.np-loading { display: none; align-items: center; gap: 12px; padding: 48px 0; justify-content: center; color: var(--dim); }
+#newDrawer.loading .np-loading { display: flex; }
+.np-loading .spin { width: 22px; height: 22px; border: 2.5px solid var(--line); border-top-color: var(--run); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .np-loading .spin { animation-duration: 2.4s; } }
 .drawer footer { padding: 14px 24px; border-top: 1px solid var(--line); display: flex; gap: 12px; align-items: center; }
 .msg-line { color: var(--dim); flex: 1; min-width: 0; }
 .msg-line.ok { color: var(--ok); } .msg-line.bad { color: var(--bad); }
@@ -654,6 +661,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
 <main id="newDrawer" class="drawer" aria-labelledby="newH">
   <header><h2 id="newH">New project</h2></header>
   <form id="npForm" autocomplete="off">
+    <div class="np-loading" id="npLoading" role="status"><span class="spin" aria-hidden="true"></span>Reading disks and projects…</div>
     <p class="banner" id="npProblem" hidden></p>
     <div class="f"><label for="npDrive">Project drive</label>
       <select id="npDrive"></select>
@@ -1913,10 +1921,14 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   }
 
   async function showProjects() {
-    $("npMsg").className = "msg-line"; $("npMsg").textContent = "Reading the drives and the job list…";
-    try { await loadSetup(); } catch (e) { $("npMsg").className = "msg-line bad"; $("npMsg").textContent = "Couldn't reach the service. Reload the page to try again."; return; }
-    $("npMsg").textContent = "";
-    preview(); renderRecent();
+    const drawer = $("newDrawer");
+    drawer.classList.add("loading"); $("npMsg").className = "msg-line"; $("npMsg").textContent = "";
+    try { await loadSetup(); } catch (e) {
+      $("npLoading").replaceChildren("Couldn't reach the service. Reload the page to try again.");
+      return;
+    }
+    await preview(); renderRecent();
+    drawer.classList.remove("loading");
     (NP.drive == null ? $("adVol") : $("npJobSel")).focus();
   }
   // jobs made recently, newest first
