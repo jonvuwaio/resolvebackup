@@ -15,7 +15,9 @@ import menubar
 
 
 def main() -> int:
-    if sys.argv[1:2] == [rcb.WATCHDOG_FLAG]:  # started by the app itself to look after a hidden Resolve
+    if sys.argv[1:2] in ([rcb.WATCHDOG_FLAG], [rcb.resolve_worker.WORKER_FLAG], [rcb.HEALTH_FLAG]):
+        # started by the app itself: the hidden Resolve's watchdog, the process that makes the calls into
+        # Resolve, or launchd's health check
         return rcb.main(sys.argv[1:])
     rcb.setup_logging(False)
     cfg_path = rcb.default_config_path()
@@ -25,6 +27,14 @@ def main() -> int:
         cfg_path.write_text(json.dumps(rcb.DEFAULTS, indent=2) + "\n", encoding="utf-8")
     runner = rcb.ServiceRunner(cfg_path)
     if runner.start():
+        if getattr(sys, "frozen", False):  # the packaged app: keep launchd pointed at this copy
+            try:
+                if menubar.sync_login():
+                    rcb.log.info("Open at login now opens this copy of the app")
+                if menubar.install_health_check():
+                    rcb.log.info("Health check installed: the app is restarted if it crashes or stops answering")
+            except OSError as e:
+                rcb.log.warning("Could not set up launch at login or the health check: %s", e)
         return menubar.run_app(runner, first_run=first_run)
     # Another copy (for example the older background-service install) already runs the backups:
     # just show its status instead of starting a second service.

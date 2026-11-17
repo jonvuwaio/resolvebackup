@@ -61,10 +61,12 @@ from pathlib import Path
 
 import frameio
 import project_setup
+import resolve_worker
 import vidchecker
+from resolve_worker import ResolveNotAnswering
 
 APP = "resolve-cloud-backup"
-VERSION = "1.29.5"
+VERSION = "1.30.0"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -141,6 +143,12 @@ DEFAULTS = {
     "resolve_script_lib": None,
     # Resolve's executable, for background_resolve. null = the standard install in /Applications.
     "resolve_app": None,
+    # Minutes one project's backup may take in a Resolve you have open (the hidden one gets 3). Past that the app
+    # stops waiting, counts the project as failed for now and carries on; your Resolve itself is never stopped.
+    "own_resolve_export_limit_minutes": 15,
+    # Warn (dashboard, menu bar, alert_command) when the Resolve you have open uses more memory than this, in GB.
+    # A Resolve left open for days can grow until every backup takes many minutes. 0 = never warn.
+    "resolve_memory_warn_gb": 24,
     # New project set-up (dashboard > New project): folder templates, the workstation drives a job can go on,
     # and extra locations that can also get folders. See project_setup.py for the format.
     "project_setup": {"templates_dir": None, "drives": [], "extras": []},
@@ -386,11 +394,17 @@ class SingleInstance:
 
 
 # ------------------------------------------------------------------ Resolve access
-def connect_resolve(cfg: dict):
-    """Return the Resolve scripting object, or None if Resolve isn't reachable."""
+def script_paths(cfg: dict) -> tuple[str, str]:
+    """Where Resolve's scripting module and library are: config, then environment, then the standard install."""
     api, lib = default_script_paths()
-    api = cfg.get("resolve_script_api") or os.environ.get("RESOLVE_SCRIPT_API") or api
-    lib = cfg.get("resolve_script_lib") or os.environ.get("RESOLVE_SCRIPT_LIB") or lib
+    return (cfg.get("resolve_script_api") or os.environ.get("RESOLVE_SCRIPT_API") or api,
+            cfg.get("resolve_script_lib") or os.environ.get("RESOLVE_SCRIPT_LIB") or lib)
+
+
+def connect_resolve(cfg: dict):
+    """Return the Resolve scripting object, or None if Resolve isn't reachable. In this process: for the command
+    line tools; the service goes through a resolve_worker.Worker so a stuck call can't freeze it."""
+    api, lib = script_paths(cfg)
     os.environ["RESOLVE_SCRIPT_API"] = api
     os.environ["RESOLVE_SCRIPT_LIB"] = lib
     modules = os.path.join(api, "Modules")
@@ -522,6 +536,56 @@ def front_app_pid(run=subprocess.run) -> int | None:
         return None
     m = re.search(r'"pid"=(\d+)', out or "")
     return int(m.group(1)) if m else None
+
+
+def process_memory_gb(pid: int, run=subprocess.run) -> float | None:
+    """Resident memory of a process, in GB (1e9 bytes)."""
+    try:
+        out = run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True, timeout=10).stdout
+        return int(out.strip()) * 1024 / 1e9
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def parse_etime(s: str) -> int | None:
+    """ps's elapsed time, "[[dd-]hh:]mm:ss", in seconds."""
+    m = re.fullmatch(r"(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)", (s or "").strip())
+    if not m:
+        return None
+    d, h, mi, se = (int(x) if x else 0 for x in m.groups())
+    return ((d * 24 + h) * 60 + mi) * 60 + se
+
+
+def process_age(pid: int, run=subprocess.run) -> int | None:
+    """Seconds since a process started."""
+    try:
+        return parse_etime(run(["ps", "-o", "etime=", "-p", str(pid)], capture_output=True, text=True,
+                               timeout=10).stdout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def login_age(run=subprocess.run) -> int | None:
+    """Seconds since this user logged in on macOS: the age of their Dock, which starts with the session."""
+    try:
+        out = run(["ps", "-x", "-o", "etime=,comm="], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in (out or "").splitlines():
+        etime, _, comm = line.strip().partition(" ")
+        if comm.strip() == "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock":
+            return parse_etime(etime)
+    return None
+
+
+def boot_id(run=subprocess.run) -> str | None:
+    """Changes every time the Mac starts (kern.boottime)."""
+    try:
+        out = run(["sysctl", "-n", "kern.boottime"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"sec = (\d+)", out or "")
+    return m.group(1) if m else None
 
 
 def resolve_prefs_dir() -> Path:
@@ -823,9 +887,14 @@ class HiddenResolve:
             if not self.alive():
                 log.error("Hidden DaVinci Resolve exited while starting up")
                 return None
-            r = self.connect_fn(cfg)
-            pm = r.GetProjectManager() if r else None
-            if pm and pm.GetCurrentDatabase():
+            try:
+                r = self.connect_fn(cfg)
+                pm = r.GetProjectManager() if r else None
+                ready = bool(pm and pm.GetCurrentDatabase())
+            except ResolveNotAnswering as e:  # still starting up; the worker has been replaced, try again
+                log.info("Hidden DaVinci Resolve not answering yet: %s", e)
+                ready = False
+            if ready:
                 self.resolve = r
                 log.info("Hidden DaVinci Resolve ready after %.0f s", self.clock() - start)
                 return r
@@ -914,10 +983,12 @@ class LiveStatus:
         self._events = collections.deque(maxlen=300)
         self._d = {"state": "starting", "paused": False, "cycle": None, "last_cycle": None,
                    "next_run_at": None, "resolve": {"connected": False}}
+        self._touched = time.monotonic()  # last time the service loop reported anything; see quiet_for()
 
     def set(self, **kw) -> None:
         with self._lock:
             self._d.update(kw)
+            self._touched = time.monotonic()
 
     def get(self, key):
         with self._lock:
@@ -925,8 +996,14 @@ class LiveStatus:
 
     def update_cycle(self, **kw) -> None:
         with self._lock:
+            self._touched = time.monotonic()
             if self._d["cycle"] is not None:
                 self._d["cycle"] = {**self._d["cycle"], **kw}
+
+    def quiet_for(self) -> float:
+        """Seconds since the service loop last reported anything (it does every second when idle)."""
+        with self._lock:
+            return time.monotonic() - self._touched
 
     def event(self, level: str, msg: str) -> None:
         with self._lock:
@@ -1222,6 +1299,16 @@ class Backup:
             stats["status"] = "resolve_unavailable"
             self.status.set(resolve={"connected": False})
             return self._finish(stats, state)
+        try:
+            return self._cycle_connected(resolve, stats, state, now, interrupted, hidden, expect_db)
+        except ResolveNotAnswering as e:
+            log.error("Stopped this check: %s. It carries on next time", e)
+            stats["status"] = "resolve_not_answering"
+            self.status.set(resolve={"connected": False})
+            return self._finish(stats, state)
+
+    def _cycle_connected(self, resolve, stats: dict, state: dict, now: dt.datetime, interrupted, hidden: bool,
+                         expect_db: str | None) -> dict:
         pm = resolve.GetProjectManager()
         if not pm:
             stats["status"] = "no_project_manager"
@@ -1289,9 +1376,14 @@ class Backup:
         except CycleInterrupted:
             stats["status"] = "interrupted"
             log.info("Stopped this check part way through; it carries on next time")
+        except ResolveNotAnswering:
+            ctx["lost"] = True  # nothing more can be asked of Resolve this check
+            raise
         finally:
             try:
-                if switched:
+                if ctx.get("lost"):
+                    pass
+                elif switched:
                     pm.SetCurrentDatabase(orig_db)
                 else:
                     goto_path(pm, orig_path)
@@ -1382,6 +1474,8 @@ class Backup:
         if getter:
             try:
                 attrs = getter() or {}
+            except ResolveNotAnswering:
+                raise
             except Exception as e:  # noqa: BLE001
                 log.warning("GetProjectAttributesInCurrentFolder failed: %s", e)
         names = list(pm.GetProjectListInCurrentFolder() or [])
@@ -1450,7 +1544,11 @@ class Backup:
         ctx["exports"] += 1
         collab = truthy(attrs.get("liveCollaborationMode"))
         self._progress(stats, current=full, phase="exporting")
-        out, reason = self._export(pm, path, name, ctx, collab)
+        lost = None
+        try:
+            out, reason = self._export(pm, path, name, ctx, collab)
+        except ResolveNotAnswering as e:  # counted as a failure, so a project that hangs Resolve waits its turn
+            out, reason, lost = None, f"DaVinci Resolve stopped answering while backing it up ({e})", e
         entry = state["projects"].setdefault(key, {})
         if out:
             entry.update(last_modified=mod, last_backup=now.isoformat(timespec="seconds"),
@@ -1473,6 +1571,8 @@ class Backup:
                 self.alert(full, ctx["folder"], n, reason)
         self._progress(stats, current=full, phase="scanning")
         self.save_state(state)
+        if lost:
+            raise lost
         if self.cfg["pause_between_exports_seconds"]:
             self.sleep(self.cfg["pause_between_exports_seconds"])
 
@@ -1488,6 +1588,8 @@ class Backup:
         try:
             with self.limit(f"backing up {name}"):
                 pm.ExportProject(name, str(tmp), self.cfg["with_stills_and_luts"])
+        except ResolveNotAnswering:
+            raise
         except Exception as e:  # noqa: BLE001
             log.warning("ExportProject(%r) raised: %s", name, e)
         return tmp.exists() and tmp.stat().st_size > 0
@@ -1500,6 +1602,8 @@ class Backup:
             if not proj:
                 return False
             return self._direct(pm, name, tmp)
+        except ResolveNotAnswering:
+            raise
         except Exception as e:  # noqa: BLE001
             log.warning("Load-and-export of %r failed: %s", name, e)
             return False
@@ -1641,6 +1745,16 @@ class Service:
         self._in_cycle = False
         self.paused = False
         self.next_run = wall()  # first cycle straight away
+        # Every call into Resolve goes through a separate process with a time limit, so a slow or stuck Resolve
+        # can't freeze the dashboard and menu bar (see resolve_worker). Tests pass their own ``connect``.
+        self.worker = resolve_worker.Worker()
+        self.isolated = connect is None
+        connect = connect or (lambda cfg: self.worker.connect(*script_paths(cfg)))
+        self.run = subprocess.run  # for ps and friends; tests swap it
+        self.hidden_marker = self.dir / "hidden_resolve.json"
+        self._reclaim_checked = False
+        self._powering_off = False
+        self._memory_warned: int | None = None
         self.hidden_factory = hidden_factory or (lambda cfg: HiddenResolve(cfg, connect=connect))
         self.processes = processes
         self.active_library = active_library or ActiveLibrary(resolve_prefs_dir() / "activedb.conf",
@@ -1673,6 +1787,23 @@ class Service:
     def stop(self) -> None:
         self._stop.set()
         self.wake.set()
+
+    def close(self) -> None:
+        """After the loop has stopped: let the worker process go."""
+        self.worker.close()
+
+    def power_off(self) -> None:
+        """The Mac is restarting, shutting down or logging out: stop, and stop a hidden Resolve at once, before
+        macOS notes it as an open app to reopen (with its window) at the next login."""
+        log.info("The Mac is shutting down or logging out; stopping")
+        self._powering_off = True  # keep the hidden_marker: if macOS reopens Resolve anyway, it's taken back
+        self.stop()
+        for pid, args in self.processes():
+            if " -nogui" in args:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
 
     @property
     def stopping(self) -> bool:
@@ -1791,11 +1922,14 @@ class Service:
         procs = self.processes()
         hidden = [pid for pid, args in procs if " -nogui" in args]
         if procs and len(hidden) < len(procs):
-            return None  # the user has Resolve open
+            if not self._reclaim_reopened(procs):
+                return None  # the user has Resolve open
+            procs, hidden = [], []
         h = self.hidden_factory(self.cfg)
-        h.on_exit = self.active_library.restore
+        h.on_exit = self._hidden_exited
         if procs:
             h.adopt(hidden[0])
+            self._mark_hidden(h.pid)
             self.watchdog(h.pid)
             return h
         lib = self._next_library() if self.cfg.get("rotate_libraries") else None
@@ -1804,10 +1938,85 @@ class Service:
             log.info("Hidden check of library %s", self.backup.known_library_names(self.backup.load_state())
                      .get(lib, lib))
         if h.launch():
+            self._mark_hidden(h.pid)
             self.watchdog(h.pid)
             return h
         self.active_library.restore()
         return None
+
+    # A hidden Resolve still running when the Mac restarts or logs out is reopened by macOS at the next login as an
+    # ordinary Resolve, window and all; the app then took it for the user's and left it open for days. A note
+    # (hidden_marker) says a hidden Resolve is running, so after a restart that one can be told apart and taken back.
+    def _mark_hidden(self, pid: int | None) -> None:
+        try:
+            write_atomic(self.hidden_marker, json.dumps({"pid": pid, "boot": boot_id(self.run)}))
+        except OSError as e:
+            log.debug("Could not note the hidden Resolve: %s", e)
+
+    def _hidden_exited(self) -> None:
+        if not self._powering_off:
+            self.hidden_marker.unlink(missing_ok=True)
+        self.active_library.restore()
+
+    def _reclaim_reopened(self, procs) -> bool:
+        """True after quitting a Resolve that macOS reopened at login because it was running hidden when the Mac
+        last stopped. Only when it is plainly not in use: it started with this login, isn't in front and has no
+        project open. Checked once per run of the app; anything else is the user's Resolve and is left alone."""
+        if self._reclaim_checked:
+            return False
+        self._reclaim_checked = True
+        try:
+            note = json.loads(self.hidden_marker.read_text())
+        except (OSError, ValueError):
+            return False
+        self.hidden_marker.unlink(missing_ok=True)  # one look only, whatever is decided
+        boot = boot_id(self.run)
+        gui = [pid for pid, args in procs if " -nogui" not in args]
+        if not boot or note.get("boot") in (None, boot) or len(gui) != 1 or len(procs) != 1:
+            return False
+        pid = gui[0]
+        age, since_login = process_age(pid, self.run), login_age(self.run)
+        if age is None or since_login is None or abs(age - since_login) > 300:
+            return False  # opened later than the login: someone opened it
+        if front_app_pid(self.run) == pid:
+            return False
+        try:
+            r = self.backup.connect(self.cfg)
+            pm = r.GetProjectManager() if r else None
+            cur = pm.GetCurrentProject() if pm else None
+            name = cur.GetName() if cur else None
+        except Exception as e:  # noqa: BLE001
+            log.info("Left the reopened DaVinci Resolve alone: couldn't see what it has open (%s)", e)
+            return False
+        if not pm or name not in (None, "", "Untitled Project"):
+            return False
+        log.warning("DaVinci Resolve was reopened by macOS at login because it was running hidden for backups when "
+                    "the Mac stopped. Nothing is open in it, so it's being quit and backups go back to running hidden")
+        h = self.hidden_factory(self.cfg)
+        h.on_exit = self.active_library.restore  # macOS reopened it on the library the hidden check had chosen
+        h.adopt(pid)
+        h.resolve = r
+        h.quit()
+        return not h.alive()
+
+    def _check_own_resolve(self, procs) -> None:
+        """Watch the memory of a Resolve the user has open. It is never stopped by this app; past
+        resolve_memory_warn_gb the dashboard and menu bar ask for a restart, and alert_command runs once."""
+        gui = [pid for pid, args in procs if " -nogui" not in args]
+        if not gui:
+            self.status.set(resolve_health=None)
+            return
+        pid, limit = gui[0], self.cfg.get("resolve_memory_warn_gb") or 0
+        gb = process_memory_gb(pid, self.run)
+        warn = bool(limit) and gb is not None and gb >= limit
+        self.status.set(resolve_health={"pid": pid, "memory_gb": None if gb is None else round(gb, 1),
+                                        "limit_gb": limit, "warn": warn})
+        if warn and self._memory_warned != pid:
+            self._memory_warned = pid
+            msg = (f"DaVinci Resolve is using {gb:.0f} GB of memory, so backups are slow. "
+                   "Quit and reopen Resolve when you can.")
+            log.warning(msg)
+            self.backup.alert("DaVinci Resolve", "", 0, msg)
 
     def _next_library(self) -> str | None:
         """The cloud library (DbName) checked longest ago, never-checked ones first; None if none is known."""
@@ -1834,15 +2043,19 @@ class Service:
         self._in_cycle = True
         hidden = None
         try:
+            if self.isolated:
+                self._check_own_resolve(self.processes())
             hidden = self._hidden_session()
             if hidden:
-                self.backup.limit = lambda what: self.time_limit(hidden.pid, EXPORT_LIMIT, what)
+                self.status.set(resolve_health=None)
+                self.backup.limit = lambda what: self._limits(hidden.pid, EXPORT_LIMIT, what)
                 status = self.backup.cycle(
                     connect=lambda cfg: hidden.connect(cfg, lambda: self.stopping),
                     interrupted=lambda: self.stopping or hidden.wanted() or self.setup.has_pending()
                     or self._cancel_run.is_set(), hidden=True,
                     expect_db=hidden.library)["status"]
             else:
+                self.backup.limit = lambda what: self._limits(None, self.own_export_limit(), what)
                 status = self.backup.cycle(interrupted=lambda: self.stopping or self.setup.has_pending()
                                            or self._cancel_run.is_set())["status"]
         except Exception:  # noqa: BLE001
@@ -1859,9 +2072,22 @@ class Service:
             self.backup.limit = Backup.no_limit
             self._in_cycle = False
             lock.release()
-        retry = status in ("resolve_unavailable", "error", "no_project_manager", "backup_dir_unavailable")
+        retry = status in ("resolve_unavailable", "error", "no_project_manager", "backup_dir_unavailable",
+                           "resolve_not_answering")
         wait = self.cfg["retry_minutes"] * 60 if retry else self._wait_after_cycle()
         self.next_run = self.wall() + wait * random.uniform(0.95, 1.05)
+
+    def own_export_limit(self) -> float:
+        return max(1, self.cfg.get("own_resolve_export_limit_minutes") or 15) * 60
+
+    @contextlib.contextmanager
+    def _limits(self, hidden_pid: int | None, seconds: float, what: str):
+        """Both time limits on one call into Resolve. For the hidden Resolve, the watchdog stops it after
+        ``seconds`` (TimeLimit) and the worker gives up 30 s later if even that didn't free the call; in the
+        user's own Resolve only the worker gives up, and Resolve is left running."""
+        with self.time_limit(hidden_pid, seconds, what) as t, \
+                self.worker.limit(seconds + 30 if hidden_pid else seconds, what):
+            yield t
 
     def _run_setup_jobs(self) -> None:
         lock = SingleInstance(self.dir / "cycle.lock")
@@ -1913,11 +2139,11 @@ class Service:
             elif HiddenResolve.available(self.cfg):
                 if hidden_pids:  # a hidden copy left running: quit it, it may be on another library
                     old = self.hidden_factory(self.cfg)
-                    old.on_exit = self.active_library.restore
+                    old.on_exit = self._hidden_exited
                     old.adopt(hidden_pids[0])
                     old.quit()
                 h = self.hidden_factory(self.cfg)
-                h.on_exit = self.active_library.restore
+                h.on_exit = self._hidden_exited
                 uuid = library_uuid(db)
                 if not uuid or not self.active_library.point_at(uuid):
                     return fail("Couldn't choose the library for the hidden Resolve. Open Resolve, then press Retry.")
@@ -1927,6 +2153,7 @@ class Service:
                     self.active_library.restore()
                     h = None
                     return fail("DaVinci Resolve didn't start. Press Retry, or open Resolve first.")
+                self._mark_hidden(h.pid)
                 self.watchdog(h.pid)
                 resolve = h.connect(self.cfg, lambda: self.stopping)
                 if not resolve:
@@ -1948,7 +2175,8 @@ class Service:
                         return fail(f"There's no backup of the template project {tpl} to copy into {job['library']}.")
                     src = Path(tmp) / "template.drp"
                     shutil.copyfile(backup, src)  # a copy, so Resolve never works on the backup itself
-                with self.time_limit(h.pid if h else None, PROJECT_LIMIT, f"making {job['project']}") as t:
+                limit = PROJECT_LIMIT if h else self.own_export_limit()
+                with self._limits(h.pid if h else None, limit, f"making {job['project']}") as t:
                     res = make_resolve_project(pm, job, Path(tmp), template_drp=src)
                 if t.fired:
                     log.warning("Gave up making %s: the hidden DaVinci Resolve stopped answering", job["project"])
@@ -1956,6 +2184,10 @@ class Service:
                                 f"after {PROJECT_LIMIT} seconds. The project may have been made anyway: "
                                 "press Retry, which won't make a second copy.")
                 return res
+        except ResolveNotAnswering as e:
+            log.warning("Gave up making %s: %s", job["project"], e)
+            return fail("DaVinci Resolve stopped answering while making the project. It may have been made anyway: "
+                        "press Retry, which won't make a second copy.")
         finally:
             if h:
                 try:
@@ -1991,6 +2223,93 @@ class Service:
             nxt = _iso(self.next_run)
         self.status.set(state=state, next_run_at=nxt)
         return max(0.05, min(1.0, self.next_run - now))
+
+
+# --------------------------------------------------------------- self-healing
+HEALTH_FLAG = "--rcb-health-check"
+HEALTH_STALE = 45 * 60  # a quiet loop longer than this is stuck: longer than the slowest allowed backup of a project
+HEALTH_FAILS = 5        # health checks (a minute apart) failed in a row before the app is restarted
+HEALTH_FILE = "health.json"
+
+
+def relaunch_command(executable: str | None = None) -> list[str] | None:
+    """How to start the Mac app again (open -a on its bundle); None when not running as the packaged app."""
+    if not getattr(sys, "frozen", False) and executable is None:
+        return None
+    parts = Path(executable or sys.executable).resolve().parts
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i].endswith(".app"):
+            return ["/usr/bin/open", "-a", str(Path(*parts[:i + 1]))]
+    return None
+
+
+def _fetch_health(port: int, timeout: float = 20) -> bool:
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/healthz", headers={"Host": f"127.0.0.1:{port}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status == 200
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+
+
+def run_health_check(directory: Path | None = None, fetch=_fetch_health, alive=pid_alive, kill=os.kill,
+                     run=subprocess.run, sleep=time.sleep) -> int:
+    """Run by launchd once a minute (see menubar.install_health_check). If the app crashed, start it again; if it
+    has stopped answering for HEALTH_FAILS checks in a row, stop it and start it again. A hidden Resolve it was
+    using is quit by its own watchdog. An app that was quit on purpose removes service.json and is left alone."""
+    d = Path(directory) if directory else app_dir()
+    info = read_service_info(d)
+    path = d / HEALTH_FILE
+    if not info or not info.get("pid"):
+        path.unlink(missing_ok=True)
+        return 0
+    try:
+        fails = int(json.loads(path.read_text()).get("fails", 0))
+    except (OSError, ValueError, AttributeError):
+        fails = 0
+    pid = int(info["pid"])
+
+    def restart(why: str) -> None:
+        log.warning("%s; starting Colour Project Manager again", why)
+        (d / "service.json").unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
+        cmd = info.get("relaunch")
+        if not cmd:
+            log.error("Don't know how to start Colour Project Manager again; open it yourself")
+            return
+        try:
+            run(cmd, timeout=60, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            log.error("Could not start Colour Project Manager again: %s", e)
+
+    if not alive(pid):
+        restart("Colour Project Manager stopped without quitting properly")
+        return 0
+    if fetch(int(info.get("port") or 0)):
+        if fails:
+            log.info("Colour Project Manager is answering again")
+        path.unlink(missing_ok=True)
+        return 0
+    fails += 1
+    log.warning("Colour Project Manager didn't answer its health check (%d of %d)", fails, HEALTH_FAILS)
+    if fails < HEALTH_FAILS:
+        write_atomic(path, json.dumps({"fails": fails}))
+        return 0
+    for sig, wait in ((signal.SIGTERM, 30), (signal.SIGKILL, 10)):
+        try:
+            kill(pid, sig)
+        except OSError:
+            break
+        for _ in range(wait * 2):
+            if not alive(pid):
+                break
+            sleep(0.5)
+        if not alive(pid):
+            break
+    restart(f"Colour Project Manager stopped answering for {HEALTH_FAILS} minutes, so it was stopped")
+    return 0
 
 
 # --------------------------------------------------------------- the dashboard
@@ -2129,7 +2448,8 @@ class DashboardServer:
             self.bonjour.start()
         _write_private(self.dir / "service.json", json.dumps({
             "pid": os.getpid(), "port": self.port, "token": self.token, "version": VERSION,
-            "started_at": self.started.isoformat(timespec="seconds"), "dashboard": self.url()}))
+            "started_at": self.started.isoformat(timespec="seconds"), "dashboard": self.url(),
+            "relaunch": relaunch_command()}))
 
     def url(self) -> str:
         return f"http://127.0.0.1:{self.port}/?t={self.token}"
@@ -2169,6 +2489,14 @@ class DashboardServer:
             (self.dir / "service.json").unlink()
         except OSError:
             pass
+
+    def health(self) -> tuple[bool, dict]:
+        """Whether the service loop is still making progress. Calls into Resolve have time limits, so a loop that
+        has been quiet for HEALTH_STALE seconds is stuck on something else (a hung network drive, a bug)."""
+        quiet = self.svc.status.quiet_for()
+        ok = quiet < HEALTH_STALE
+        return ok, {"ok": ok, "pid": os.getpid(), "version": VERSION, "quiet_s": round(quiet),
+                    "resolve_call_s": round(self.svc.worker.busy_for())}
 
     # ---- payloads
     def status_payload(self, since: int = 0) -> dict:
@@ -2315,6 +2643,13 @@ def _make_handler(dash: DashboardServer):
                 if urllib.parse.urlparse(self.path).path == "/frameio/callback":
                     self._frameio_callback()
                     return
+                if urllib.parse.urlparse(self.path).path == "/healthz":  # for the health check; says nothing private
+                    if (self.headers.get("Host") or "").lower() not in dash.hosts(lan=False):
+                        self._send(403, {"error": "Wrong host"})
+                        return
+                    ok, body = dash.health()
+                    self._send(200 if ok else 503, body)
+                    return
                 auth = self._authorise(header_only=False)
                 if not auth:
                     return
@@ -2367,6 +2702,8 @@ def _make_handler(dash: DashboardServer):
                     self._send(204, b"", "image/x-icon")
                 else:
                     self._send(404, {"error": "Not found"})
+            except (BrokenPipeError, ConnectionResetError):
+                log.debug("Dashboard request: the browser went away before the answer was sent")
             except Exception:  # noqa: BLE001
                 log.exception("Dashboard request failed")
                 self._send(500, {"error": "Internal error. See the log."})
@@ -2480,6 +2817,8 @@ def _make_handler(dash: DashboardServer):
                     self._send(200, {"ok": True, "message": "Saved. New settings apply from the next cycle."})
                 else:
                     self._send(404, {"error": "Not found"})
+            except (BrokenPipeError, ConnectionResetError):
+                log.debug("Dashboard request: the browser went away before the answer was sent")
             except Exception:  # noqa: BLE001
                 log.exception("Dashboard request failed")
                 self._send(500, {"error": "Internal error. See the log."})
@@ -2552,6 +2891,8 @@ class ServiceRunner:
             self.svc.stop()
         if self.thread and self.thread is not threading.current_thread():
             self.thread.join(30)  # long enough to quit a hidden Resolve
+        if self.svc:
+            self.svc.close()
         if self.dash:
             self.dash.stop()
             self.dash = None
@@ -2723,6 +3064,11 @@ def main(argv=None) -> int:
     if argv[:1] == [WATCHDOG_FLAG]:
         setup_logging(False)
         return run_watchdog(argv[1])
+    if argv[:1] == [resolve_worker.WORKER_FLAG]:
+        return resolve_worker.main(argv[1:])
+    if argv[:1] == [HEALTH_FLAG]:
+        setup_logging(False)
+        return run_health_check()
     ap = argparse.ArgumentParser(prog=APP, description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("command", choices=["run", "once", "list", "probe", "status", "init", "dashboard"])
     ap.add_argument("project", nargs="?", help='for `probe`: "Folder/Sub/Project Name"')

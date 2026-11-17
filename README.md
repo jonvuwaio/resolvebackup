@@ -144,6 +144,8 @@ Changes apply from the next cycle without restarting. Only the `dashboard` setti
 | `rotate_libraries` | `true` | With `background_resolve`: each hidden check opens the next of your cloud libraries in turn. See "Several cloud libraries". |
 | `skip_libraries` | `[]` | Library names to leave out of the rotation. |
 | `resolve_app` | `null` | Path to Resolve's executable for `background_resolve`; null = `/Applications/DaVinci Resolve/…/MacOS/Resolve`. |
+| `own_resolve_export_limit_minutes` | `15` | How long one project's backup may take in a Resolve you have open. Past that the app stops waiting, counts that project as failed for now and carries on. Your Resolve is never stopped. See "Self-healing". |
+| `resolve_memory_warn_gb` | `24` | Warn on the dashboard, in the menu bar and through `alert_command` when the Resolve you have open uses more memory than this. `0` = never. |
 | `database` | `{name: null, type: null}` | Database to back up; null = whichever is current in Resolve. |
 | `switch_database` | `false` | Allow switching to `database` if it isn't current. Only ever done when no project is open. |
 | `initial_lookback_days` | `7` | First run only: skip projects untouched for longer. |
@@ -223,6 +225,28 @@ about 80 seconds hidden against about 17 minutes through an open Resolve.
 - A hidden Resolve left running (for example if the watchdog was stopped too) is used by the next check and then
   quit.
 - Turn it off with `"background_resolve": false` (or the Settings checkbox).
+- **If the Mac restarts or logs out during a hidden check,** the app stops the hidden Resolve straight away. If
+  macOS reopens it anyway at the next login (as an ordinary Resolve, window and all), the app takes it back: only
+  when it started with that login, isn't in front and has no project open. It is quit and checks run hidden
+  again. Any other Resolve is yours and is never quit.
+
+## Self-healing
+
+- **Calls into Resolve run in a separate process.** Resolve's scripting library holds Python's lock while it
+  waits for Resolve, so these calls used to freeze the whole app. A Resolve left open for days grew to 53 GB, each
+  backup took up to 20 minutes, and the dashboard, drive free space and menu bar stopped answering. Now the app only
+  waits on that process, with a time limit on every call: 2 minutes for an ordinary call, 3 minutes per backup in
+  the hidden Resolve, and `own_resolve_export_limit_minutes` (15) per backup in a Resolve you have open. When a
+  call runs over, the process is replaced, that project is counted as failed (so it waits out its retry backoff),
+  and the check ends with "DaVinci Resolve stopped answering". The next one starts in `retry_minutes`.
+- **The Resolve you have open is watched, never stopped.** Past `resolve_memory_warn_gb` the dashboard and menu
+  bar say it needs a restart, and `alert_command` runs once.
+- **A health check restarts the app.** The Mac app installs a LaunchAgent (`com.resolvecloudbackup.health`) that
+  runs the app's own program every minute. If the app crashed, it starts it again. If the app hasn't answered for
+  5 checks in a row (its loop quiet for 45 minutes, or no answer at all), it stops the app and starts it again. A
+  hidden Resolve it was using is quit by its watchdog. Quit the app from the menu bar and it is left alone.
+- **Open at login follows the copy you run.** Each time the app starts, the login item is pointed at that copy,
+  so opening a newer version once is enough. Before, an old copy in Downloads kept starting after every restart.
 
 ## New project set-up
 
@@ -368,9 +392,9 @@ Manager → *Import Project*, and pick the newest `.drp` from the project's back
 python3 -m unittest discover -s tests -v
 ```
 
-The 208 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
+The 254 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
 collaboration scenarios, backoff and alerts, `probe`, database switching, retention, caps, filters) plus the
-scheduler, the hidden-Resolve hand-over (with faked processes), the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, the installer, and new project set-up (templates, previews, creating and rolling back folders, and its dashboard API).
+scheduler, the hidden-Resolve hand-over (with faked processes), the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, the installer, new project set-up (templates, previews, creating and rolling back folders, and its dashboard API), and self-healing: the Resolve worker process (real child processes against a fake scripting module, including a call that hangs), the health check, taking back a Resolve reopened by macOS, and the memory warning.
 
 ## Not verified against real Resolve or macOS
 

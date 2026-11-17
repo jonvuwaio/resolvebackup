@@ -723,12 +723,14 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     no_project_manager: "Resolve's Project Manager wasn't available", error: "The check hit an error",
     interrupted: "Stopped part way so you could use Resolve",
     library_not_opened: "A library didn't open in the hidden Resolve",
+    resolve_not_answering: "DaVinci Resolve stopped answering",
   };
   const HELP = {
     resolve_unavailable: "Open DaVinci Resolve Studio, sign in to Blackmagic Cloud, and set Preferences > System > General > External scripting using to Local.",
     low_disk: "Free up space or choose another backup folder in Settings.",
     backup_dir_unavailable: "Check the drive or network share is connected, or choose another folder in Settings.",
     database_not_current: "Open the database you want backed up in Resolve, or set it under Settings.",
+    resolve_not_answering: "DaVinci Resolve took too long to answer, so this check stopped and carries on in a few minutes. If it keeps happening, quit and reopen DaVinci Resolve.",
   };
 
   // ---------- helpers ----------
@@ -819,6 +821,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     if (S.denied) { msg = "This page needs its access link. Open it from the menu bar icon, or run resolve_cloud_backup.py dashboard."; bad = true; }
     else if (S.offline) { msg = "Can't reach the backup service. It may have stopped or restarted. This page keeps trying."; bad = true; }
     else if (s && s.last_cycle && HELP[s.last_cycle.status] && s.state !== "running") { msg = HELP[s.last_cycle.status]; bad = s.last_cycle.status !== "resolve_unavailable"; }
+    else if (s && s.resolve_health && s.resolve_health.warn) msg = `DaVinci Resolve is using ${Math.round(s.resolve_health.memory_gb)} GB of memory, so backups are slow. Quit and reopen it when you can.`;
     b.hidden = !msg; b.classList.toggle("bad", bad); if (msg) b.textContent = msg;
   }
 

@@ -59,6 +59,7 @@ STATUS_TEXT = {
     "error": "The check hit an error",
     "interrupted": "Stopped part way so you could use Resolve",
     "library_not_opened": "A library didn't open in the hidden Resolve",
+    "resolve_not_answering": "DaVinci Resolve stopped answering",
 }
 
 
@@ -151,6 +152,11 @@ def summarize(status: dict | None, offline: bool = False, denied: bool = False) 
                 title = STATUS_TEXT.get(last_status, "The last check had a problem")
             return {**out, "key": "bad", "colour": "bad", "title": title,
                     "detail": _last_line(last, nxt), "bad_cycle": last.get("at") if (last.get("failed") or last_bad) else None}
+        health = status.get("resolve_health") or {}
+        if health.get("warn"):
+            return {**out, "key": "ok", "colour": "wait", "title": "DaVinci Resolve needs a restart",
+                    "detail": f"It's using {health.get('memory_gb') or 0:.0f} GB of memory, so backups are slow",
+                    "notice": f"resolve_memory:{health.get('pid')}"}
         return {**out, "key": "ok", "colour": "ok", "title": "Up to date", "detail": _last_line(last, nxt)}
     return {**out, "key": "start", "colour": "idle", "title": "Starting", "detail": ""}
 
@@ -177,10 +183,15 @@ class Alerts:
     def __init__(self):
         self._seen = None
         self._primed = False
+        self._notices: set = set()
 
     def check(self, summary: dict) -> str | None:
         at = summary.get("bad_cycle")
         msg = None
+        notice = summary.get("notice")  # a standing problem, e.g. Resolve using too much memory: once each
+        if notice and notice not in self._notices:
+            self._notices.add(notice)
+            msg = f"{summary['title']}. {summary['detail']}."
         if self._primed and at and at != self._seen:
             msg = summary["title"]
         if summary["key"] in ("ok", "bad"):
@@ -319,6 +330,84 @@ def set_login(enabled: bool, command: list | None = None) -> None:
                        "RunAtLoad": True, "ProcessType": "Interactive", "LimitLoadToSessionType": "Aqua"}, fh)
 
 
+def sync_login(command: list | None = None) -> bool:
+    """If the app is set to open at login, make sure it's this copy that opens: after a newer version is opened
+    from elsewhere, an old copy kept starting at login. True when the login item was changed."""
+    import plistlib
+    p = login_plist_path()
+    try:
+        with open(p, "rb") as fh:
+            d = plistlib.load(fh)
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return False
+    want = command or login_command()
+    if d.get("ProgramArguments") == want:
+        return False
+    set_login(True, want)
+    return True
+
+
+# ------------------------------------------------------------------ health check (self-healing)
+HEALTH_LABEL = "com.resolvecloudbackup.health"
+
+
+def health_plist_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{HEALTH_LABEL}.plist"
+
+
+def health_command(executable: str | None = None) -> list:
+    """launchd runs this every minute: the app's own executable (or this project's script) with the health flag."""
+    if getattr(sys, "frozen", False) or executable:
+        return [executable or sys.executable, rcb.HEALTH_FLAG]
+    return [sys.executable, str(Path(rcb.__file__).resolve()), rcb.HEALTH_FLAG]
+
+
+def install_health_check(command: list | None = None, run=subprocess.run) -> bool:
+    """A LaunchAgent that runs rcb.run_health_check every minute: it starts the app again if it crashed and
+    restarts it if it stops answering. Rewritten (and reloaded) only when it changes. True when it changed."""
+    import plistlib
+    p = health_plist_path()
+    want = {"Label": HEALTH_LABEL, "ProgramArguments": command or health_command(), "StartInterval": 60,
+            "RunAtLoad": False, "ProcessType": "Background", "LimitLoadToSessionType": "Aqua"}
+    try:
+        with open(p, "rb") as fh:
+            if plistlib.load(fh) == want:
+                return False
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        pass
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "wb") as fh:
+        plistlib.dump(want, fh)
+    domain = f"gui/{os.getuid()}"
+    try:
+        run(["launchctl", "bootout", f"{domain}/{HEALTH_LABEL}"], capture_output=True, timeout=30, check=False)
+        run(["launchctl", "bootstrap", domain, str(p)], capture_output=True, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass  # loaded at the next login instead
+    return True
+
+
+def watch_power_off(callback):
+    """Call ``callback`` when the Mac starts to restart, shut down or log out. Returns the observer (keep it)."""
+    try:
+        from AppKit import NSWorkspace, NSWorkspaceWillPowerOffNotification  # type: ignore
+        from Foundation import NSObject  # type: ignore
+    except Exception:  # noqa: BLE001
+        return None
+
+    class PowerOffObserver(NSObject):
+        def powerOff_(self, _note):
+            try:
+                callback()
+            except Exception:  # noqa: BLE001
+                pass
+
+    obs = PowerOffObserver.alloc().init()
+    NSWorkspace.sharedWorkspace().notificationCenter().addObserver_selector_name_object_(
+        obs, "powerOff:", NSWorkspaceWillPowerOffNotification, None)
+    return obs
+
+
 # ------------------------------------------------------------------------- the app
 def run_app(runner=None, first_run: bool = False) -> int:
     """Show the menu bar icon.
@@ -352,6 +441,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
     client = ServiceClient()
     icons = write_icons(rcb.app_dir() / "menubar-icons")
     alerts = Alerts()
+    power_watch = watch_power_off(runner.svc.power_off) if runner and runner.svc else None  # noqa: F841
 
     class App(rumps.App):
         def __init__(self):
