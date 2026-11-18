@@ -442,6 +442,10 @@ def run_app(runner=None, first_run: bool = False) -> int:
     icons = write_icons(rcb.app_dir() / "menubar-icons")
     alerts = Alerts()
     power_watch = watch_power_off(runner.svc.power_off) if runner and runner.svc else None  # noqa: F841
+    if runner:
+        # every way the app ends (Quit in this menu, quit from a script or the Dock, logging out) passes through
+        # here, so the service always stops cleanly: service.json is removed and the health check leaves it be
+        rumps.events.before_quit.register(runner.stop)
 
     class App(rumps.App):
         def __init__(self):
@@ -518,9 +522,7 @@ def run_app(runner=None, first_run: bool = False) -> int:
                 notify("Colour Project Manager", f"Couldn't change the login setting: {e}")
 
         def quit(self, _):
-            if runner:
-                runner.stop()
-            rumps.quit_application()
+            rumps.quit_application()  # stops the service on the way out (before_quit)
 
         def open_dashboard(self, _):
             url = client.dashboard_url()

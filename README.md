@@ -174,7 +174,10 @@ Backups must not depend on nobody having the project open, so export never needs
    Resolve (read-only is fine when it's open elsewhere), exports it and closes it again. This is the default
    (`load_to_export: "auto"`) and applies to any project.
 3. **If both fail,** the project is retried with backoff and flagged in the log, `status` and `alert_command`
-   rather than failing silently.
+   rather than failing silently. **Clear failed backups** on the Backups page forgets every failure, so each
+   project is tried afresh the next time its library is checked. A failure in a library the app no longer checks
+   (not a cloud library it takes in turn, and not open in Resolve for 7 days, such as the local library from a day
+   Resolve had it open) shows as *Failed, library not checked* and doesn't count as failing.
 
 One thing to watch: I don't know whether a *scripted* load of a locked project opens it read-only quietly or raises
 Resolve's "project in use" dialog, which could stall the service until someone dismisses it. If you ever see that,
@@ -392,7 +395,7 @@ Manager → *Import Project*, and pick the newest `.drp` from the project's back
 python3 -m unittest discover -s tests -v
 ```
 
-The 254 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
+The 258 tests run against a fake Resolve API (incremental detection, nested folders, open-elsewhere and
 collaboration scenarios, backoff and alerts, `probe`, database switching, retention, caps, filters) plus the
 scheduler, the hidden-Resolve hand-over (with faked processes), the dashboard's API and its security (token, host/origin checks), the menu bar logic and icons, the installer, new project set-up (templates, previews, creating and rolling back folders, and its dashboard API), and self-healing: the Resolve worker process (real child processes against a fake scripting module, including a call that hangs), the health check, taking back a Resolve reopened by macOS, and the memory warning.
 

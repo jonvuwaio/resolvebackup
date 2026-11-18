@@ -130,6 +130,8 @@ td small { display: block; color: var(--dim); }
 .chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .chip.ok i { background: var(--ok); } .chip.failing i { background: var(--bad); }
 .chip.failing { color: var(--bad); }
+.chip.not_checked i { background: var(--wait); } .chip.not_checked { color: var(--wait); }
+.clear-fails { margin-top: 12px; }
 .chip.current i { background: var(--run); } .chip.stale i { background: var(--wait); }
 .scroll { overflow-x: auto; }
 [hidden] { display: none !important; }
@@ -388,6 +390,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
         <div><dt>Failed</dt><dd class="num" id="cFail">0</dd></div>
       </dl>
       <ul class="fails" id="fails"></ul>
+      <button class="btn clear-fails" id="clearFails" hidden>Clear failed backups</button>
     </section>
     <section class="col" aria-labelledby="feedH">
       <div class="feed-tools">
@@ -865,6 +868,9 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     const bad = S.lib ? S.lib.projects.filter((p) => p.status === "failing") : [];
     for (const p of bad.slice(0, 4)) fails.append(h("li", {}, h("span", { class: "name" }, p.name), h("small", {}, `${plural(p.failures, "failed attempt")}. ${p.last_error || ""}`)));
     if (bad.length > 4) fails.append(h("li", {}, `and ${bad.length - 4} more`));
+    const cleanable = S.lib ? S.lib.projects.filter((p) => p.failures > 0).length : 0;
+    $("clearFails").hidden = !cleanable;
+    $("clearFails").title = `Forget ${plural(cleanable, "failed backup")}, so each is tried afresh the next time its library is checked`;
   }
   function lastSummary(l) {
     const at = date(l.at);
@@ -946,7 +952,7 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
     if (!S.lib) { body.append(h("tr", {}, h("td", { colspan: 5, class: "none" }, "Loading"))); return; }
     const q = S.q.trim().toLowerCase();
     let rows = S.lib.projects.filter((p) => (!q || (p.folder + "/" + p.name).toLowerCase().includes(q)) &&
-      (S.filter === "all" || (S.filter === "attention" && p.status === "failing") || (S.filter === "ok" && p.status === "ok") || (S.filter === "old" && p.status === "not_changed_recently")));
+      (S.filter === "all" || (S.filter === "attention" && (p.status === "failing" || p.status === "not_checked")) || (S.filter === "ok" && p.status === "ok") || (S.filter === "old" && p.status === "not_changed_recently")));
     const { k, dir } = S.sort;
     rows.sort((a, b) => { const x = a[k], y = b[k]; if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
     if (!rows.length) {
@@ -954,13 +960,13 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
       return;
     }
     for (const p of rows) {
-      const st = { ok: "Backed up", failing: "Failing", not_changed_recently: "Not changed recently" }[p.status];
+      const st = { ok: "Backed up", failing: "Failing", not_checked: "Failed, library not checked", not_changed_recently: "Not changed recently" }[p.status];
       body.append(h("tr", {},
         h("td", {}, h("span", { class: "name" }, p.name), p.folder ? h("small", {}, p.folder) : null),
         h("td", { title: p.last_backup ? date(p.last_backup).toLocaleString() : "" }, ago(date(p.last_backup))),
         h("td", {}, p.last_modified || ""),
         h("td", { class: "r num" }, bytes(p.size)),
-        h("td", {}, h("span", { class: "chip " + p.status }, h("i"), st), p.status === "failing" ? h("small", {}, p.last_error || "") : null)));
+        h("td", {}, h("span", { class: "chip " + p.status }, h("i"), st), p.status === "failing" || p.status === "not_checked" ? h("small", {}, p.last_error || "") : null)));
     }
   }
   // ---------- render: libraries ----------
@@ -1030,6 +1036,14 @@ code.sel { user-select: all; font-size: 12px; overflow-wrap: anywhere; }
   $("hRun").addEventListener("click", () => $("runNow").click());
   $("hStop").addEventListener("click", () => $("stopRun").click());
   $("hPause").addEventListener("click", () => $("pause").click());
+  $("clearFails").addEventListener("click", async () => {
+    const n = S.lib ? S.lib.projects.filter((p) => p.failures > 0).length : 0;
+    if (!confirm(`Clear ${plural(n, "failed backup")}? Each project is tried afresh the next time its library is checked.`)) return;
+    $("clearFails").disabled = true;
+    try { await api("/api/clear-failures", {}); } catch (e) { /* status shows */ }
+    $("clearFails").disabled = false;
+    pollLibrary();
+  });
   $("stopRun").addEventListener("click", async () => { $("stopRun").disabled = true; try { await api("/api/stop-run", {}); } catch (e) { /* status shows */ } });
   $("pause").addEventListener("click", async () => { try { await api("/api/pause", { paused: !(S.status && S.status.paused) }); } catch (e) { /* shown by status */ } });
   $("range").addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (!b) return; S.hours = +b.dataset.w; for (const x of $("range").children) x.setAttribute("aria-pressed", String(x === b)); renderTimeline(); });

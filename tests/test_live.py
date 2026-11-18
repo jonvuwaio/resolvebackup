@@ -390,6 +390,62 @@ class DashboardTests(LiveBase):
         self.assertEqual((bad["status"], bad["failures"]), ("failing", 1))
         self.assertTrue(bad["last_error"])
 
+    def test_failure_in_a_library_no_longer_checked_is_not_counted(self):
+        # recorded on a day Resolve had its local library open; that library hasn't been open since
+        old = (self.clock.t - dt.timedelta(days=8)).isoformat(timespec="seconds")
+        st = self.svc.backup.load_state()
+        st["projects"]["default::Sheba"] = {"failures": 1, "last_error": "both failed", "next_try": old}
+        st["databases"] = {"default@": {"DbName": None, "last_checked": old}}
+        self.svc.backup.save_state(st)
+        self.advance(2000)
+        self.svc.tick()
+        self.assertEqual(self.status.snapshot()["last_cycle"]["failing"], 0)
+        _, lib = self.req("GET", "/api/library", self.AUTH)
+        sheba = [p for p in lib["projects"] if p["name"] == "Sheba"][0]
+        self.assertEqual(sheba["status"], "not_checked")
+
+    def test_failure_in_a_recently_checked_library_still_counts(self):
+        st = self.svc.backup.load_state()
+        st["projects"]["default::Sheba"] = {"failures": 1, "next_try": self.clock.t.isoformat(timespec="seconds")}
+        self.svc.backup.save_state(st)
+        self.advance(2000)
+        self.svc.tick()
+        self.assertEqual(self.status.snapshot()["last_cycle"]["failing"], 1)
+
+    def test_clear_failures_endpoint(self):
+        self.pm.add([], "Bad", stamp(self.clock.t, minutes=1))
+        self.pm.add([], "Good", stamp(self.clock.t, minutes=1))
+        self.pm.always_fail.add("Bad")
+        self.pm.locked_blocks_export = True
+        self.advance(2000)
+        self.svc.tick()
+        self.assertEqual(self.status.snapshot()["last_cycle"]["failing"], 1)
+        _, r = self.req("POST", "/api/clear-failures", self.AUTH, {})
+        self.assertEqual(r, {"ok": True, "cleared": 1})
+        last = self.req("GET", "/api/status", self.AUTH)[1]["last_cycle"]
+        self.assertEqual((last["failed"], last["failing"]), (0, 0))
+        _, lib = self.req("GET", "/api/library", self.AUTH)
+        self.assertNotIn("Bad", [p["name"] for p in lib["projects"]])  # never backed up: forgotten
+        # tried afresh at once, not after its retry back-off
+        self.pm.always_fail.discard("Bad")
+        self.advance(60)
+        self.svc.backup.cycle()
+        self.assertTrue(self.svc.backup.load_state()["projects"]["Studio Cloud::Bad"]["backed_up"])
+
+    def test_clear_reaches_a_check_already_running(self):
+        b = self.svc.backup
+        st = b.load_state()
+        st["projects"]["db::Old"] = {"failures": 3, "next_try": "2026-10-13T11:00:00", "last_backup": "x"}
+        b.save_state(st)
+        running = b.load_state()  # a check in progress holds this copy
+        self.assertEqual(b.clear_failures(), 1)
+        running["projects"]["db::New"] = {"failures": 1, "next_try": "2026-10-13T12:05:00"}  # fails after the clear
+        b.save_state(running)
+        saved = b.load_state()["projects"]
+        self.assertEqual(saved["db::Old"]["failures"], 0)
+        self.assertNotIn("next_try", saved["db::Old"])
+        self.assertEqual(saved["db::New"]["failures"], 1)
+
     # ---- controls
     def test_run_now_and_pause_endpoints(self):
         _, r = self.req("POST", "/api/pause", self.AUTH, {"paused": True})

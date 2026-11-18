@@ -66,7 +66,7 @@ import vidchecker
 from resolve_worker import ResolveNotAnswering
 
 APP = "resolve-cloud-backup"
-VERSION = "1.30.0"
+VERSION = "1.30.1"
 SYSTEM = platform.system()  # "Darwin" | "Windows" | "Linux"
 log = logging.getLogger(APP)
 
@@ -1219,6 +1219,28 @@ def apply_settings(path: Path | None, clean: dict) -> None:
     os.replace(tmp, p)
 
 
+# ------------------------------------------------------------------------- failing projects
+LIBRARY_DROPPED_DAYS = 7
+
+
+def library_dropped(db: str, rec: dict, state: dict, now: dt.datetime) -> bool:
+    """True for a project in a library this app no longer checks: not one of the cloud libraries it takes in turn,
+    and not open in Resolve for LIBRARY_DROPPED_DAYS (say the local library, from a day Resolve had it open). A
+    failure there is never retried, so it would otherwise count as failing for ever."""
+    if db in (state.get("library_names") or {}):
+        return False
+    seen = [parse_ts(r.get("last_checked")) for r in (state.get("databases") or {}).values()
+            if (r.get("DbName") or "default") == db]
+    seen.append(parse_ts(rec.get("next_try")))
+    last = max((t for t in seen if t), default=None)
+    return last is None or now - last > dt.timedelta(days=LIBRARY_DROPPED_DAYS)
+
+
+def failing_count(state: dict, now: dt.datetime) -> int:
+    return sum(1 for k, v in state.get("projects", {}).items()
+               if (v.get("failures") or 0) > 0 and not library_dropped(k.partition("::")[0], v, state, now))
+
+
 # ------------------------------------------------------------------------- backup
 class Backup:
     def __init__(self, cfg: dict, state_file: Path, connect=None, clock=None, sleep=None, alert=None,
@@ -1233,6 +1255,8 @@ class Backup:
         self.limit = Backup.no_limit  # wraps each call into Resolve; see TimeLimit
         self.status = status or LiveStatus()
         self._t0 = time.monotonic()
+        self._state_lock = threading.Lock()
+        self._pending_clear: dict[str, str | None] = {}  # failures cleared from the dashboard; see clear_failures
 
     @property
     def root(self) -> Path:
@@ -1262,11 +1286,53 @@ class Backup:
         return st
 
     def save_state(self, st: dict) -> None:
+        with self._state_lock:
+            self._apply_clear(st, self._pending_clear)
+            self._write_state(st)
+
+    def _write_state(self, st: dict) -> None:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.state_file.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(st, fh, indent=1, sort_keys=True)
         os.replace(tmp, self.state_file)
+
+    # ---- failures
+    @staticmethod
+    def _apply_clear(st: dict, cleared: dict[str, str | None]) -> int:
+        """Forget the failures in ``cleared`` (project key -> its next_try when cleared). A project that has failed
+        again since keeps the new failure. One never backed up is dropped, so it is treated as new next time."""
+        n = 0
+        projects = st.get("projects", {})
+        for key, next_try in cleared.items():
+            v = projects.get(key)
+            if not v or not v.get("failures") or v.get("next_try") != next_try:
+                continue
+            n += 1
+            if not v.get("last_backup"):
+                del projects[key]
+                continue
+            v["failures"] = 0
+            for k in ("next_try", "last_error"):
+                v.pop(k, None)
+        return n
+
+    def clear_failures(self) -> int:
+        """The dashboard's Clear failed backups: forget every failure, so each project is tried afresh the next time
+        its library is checked. A check running now has the old state in memory; it is cleared there too when that
+        check next saves."""
+        with self._state_lock:
+            st = self.load_state()
+            cleared = {k: v.get("next_try") for k, v in st["projects"].items() if (v.get("failures") or 0) > 0}
+            n = self._apply_clear(st, cleared)
+            last = st.get("last_cycle")
+            if last:
+                last.update(failed=0, failing=failing_count(st, self.clock()))
+            self._write_state(st)
+            self._pending_clear.update(cleared)
+        if last:
+            self.status.set(last_cycle=last)
+        return n
 
     # ---- one cycle
     def cycle(self, connect=None, interrupted=None, hidden: bool = False, expect_db: str | None = None) -> dict:
@@ -1450,14 +1516,18 @@ class Backup:
         at = self.clock().isoformat(timespec="seconds")
         summary = {"at": at, "duration_s": round(time.monotonic() - self._t0, 1),
                    **{k: v for k, v in stats.items() if k != "files"}}
-        # projects still failing, including ones sitting out a retry back-off this cycle
-        summary["failing"] = sum(1 for v in state.get("projects", {}).values() if (v.get("failures") or 0) > 0)
-        state["last_cycle"] = summary
-        hist = state.setdefault("history", [])
-        hist.append({k: summary[k] for k in ("at", "status", "exported", "failed", "unchanged", "seen",
-                                             "duration_s")})
-        del hist[:-500]
-        self.save_state(state)
+        with self._state_lock:
+            # this check has saved since any Clear failed backups, so it has taken it in
+            self._apply_clear(state, self._pending_clear)
+            self._pending_clear = {}
+            # projects still failing, including ones sitting out a retry back-off this cycle
+            summary["failing"] = failing_count(state, self.clock())
+            state["last_cycle"] = summary
+            hist = state.setdefault("history", [])
+            hist.append({k: summary[k] for k in ("at", "status", "exported", "failed", "unchanged", "seen",
+                                                 "duration_s")})
+            del hist[:-500]
+            self._write_state(state)
         self.status.set(cycle=None, last_cycle=summary)
         log.info("Cycle %s: seen=%d exported=%d unchanged=%d old=%d failed=%d deferred=%d",
                  stats["status"], stats["seen"], stats["exported"], stats["unchanged"],
@@ -2532,12 +2602,13 @@ class DashboardServer:
 
     def library_payload(self) -> dict:
         st = self.svc.backup.load_state()
+        now = self.svc.backup.clock()
         rows = []
         for key, v in st["projects"].items():
             db, _, full = key.partition("::")
             folder, _, name = full.rpartition("/")
             if v.get("failures", 0) > 0:
-                status = "failing"
+                status = "not_checked" if library_dropped(db, v, st, now) else "failing"
             elif v.get("backed_up"):
                 status = "ok"
             else:
@@ -2803,6 +2874,11 @@ def _make_handler(dash: DashboardServer):
                     svc.frameio.disconnect()
                     log.info("Frame.io disconnected")
                     self._send(200, {"ok": True})
+                elif path == "/api/clear-failures":
+                    n = svc.backup.clear_failures()
+                    log.info("Cleared %d failed backup%s from the dashboard; they are tried afresh", n,
+                             "" if n == 1 else "s")
+                    self._send(200, {"ok": True, "cleared": n})
                 elif path == "/api/pause":
                     svc.set_paused(bool(body.get("paused", True)))
                     self._send(200, {"ok": True, "paused": svc.paused})
