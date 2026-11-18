@@ -43,14 +43,29 @@ import resolve_cloud_backup as rcb
 p = sys.argv[1]
 d = plistlib.load(open(p, "rb"))
 d.update({"LSUIElement": True, "CFBundleShortVersionString": rcb.VERSION, "CFBundleVersion": rcb.VERSION,
-          "NSHumanReadableCopyright": "resolve-cloud-backup"})
+          "NSHumanReadableCopyright": "resolve-cloud-backup",
+          # macOS asks once for Local Network access: the dashboard on colour.local, Resolve's scripting
+          # connection and the QC server are all on the local network
+          "NSLocalNetworkUsageDescription": "Colour Project Manager shows its dashboard to other machines at "
+                                            "colour.local and talks to DaVinci Resolve and the QC server.",
+          "NSBonjourServices": ["_http._tcp"]})
 plistlib.dump(d, open(p, "wb"))
 PY
 
-# Ad-hoc signature so macOS will run it on this Mac (it is not notarised).
-codesign --force --deep --sign - "$APP"
+# Signed with this Mac's own identity when there is one (make it once with ./make_signing_identity.sh): every
+# build is then the same app to macOS, which keeps what it was allowed (Local Network access) across updates.
+# Otherwise an ad-hoc signature, which macOS treats as a new app each build and asks again. Not notarised.
+IDENTITY="${SIGN_IDENTITY:-Colour Project Manager Signing}"
+if security find-identity -p codesigning | grep -q "\"$IDENTITY\""; then
+  codesign --force --deep --sign "$IDENTITY" "$APP"
+  echo "Signed with: $IDENTITY"
+else
+  codesign --force --deep --sign - "$APP"
+  echo "Ad-hoc signed: macOS will ask for Local Network access again after each update. Run ./make_signing_identity.sh once to stop that."
+fi
 ditto -c -k --keepParent "$APP" "dist/Colour-Project-Manager.zip"
 
 echo
 echo "Built: $APP"
-echo "Drag it to /Applications and open it. If macOS says it can't verify the developer, right-click > Open once."
+echo "Install it with ./install_app.sh (or drag it to /Applications and open it). If macOS says it can't verify the"
+echo "developer, right-click > Open once."

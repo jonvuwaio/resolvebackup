@@ -62,7 +62,11 @@ xcode-select --install        # once, if you don't have Python 3 yet
 ./build_mac_app.sh            # -> dist/Colour Project Manager.app  and  dist/Colour-Project-Manager.zip
 ```
 
-Drag the app to `/Applications` and open it. It's signed ad-hoc rather than notarised, so the first time macOS
+`./install_app.sh` puts it in `/Applications` (quitting the running copy first) and opens it; dragging it there
+works too. Run `./make_signing_identity.sh` once on the building Mac first: it makes a self-signed code-signing
+identity in the login keychain that every build is then signed with, so macOS sees each update as the same app and
+keeps what it was allowed. Without it builds are signed ad-hoc and macOS asks for Local Network access ("find
+devices on local networks") again after every update. Either way the app isn't notarised, so the first time macOS
 may say it can't verify the developer: right-click the app, choose *Open*, and confirm once. If you'd rather not
 build it yourself, `.github/workflows/build-mac.yml` builds the same zip on GitHub's Mac runners
 (Actions → *Build Mac app* → Run workflow) if you put this folder in a private repository.
